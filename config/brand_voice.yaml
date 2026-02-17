@@ -1,0 +1,10 @@
+tone:
+  - direct
+  - analytical
+  - builder-first
+avoid:
+  - hype
+  - emojis
+  - buzzwords
+cta_style: subtle
+max_sentence_length: 18

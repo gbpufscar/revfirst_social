@@ -1,0 +1,8 @@
+actions:
+  max_daily_posts: 2
+  max_daily_replies: 30
+  min_minutes_between_posts: 120
+  min_seconds_between_replies: 45
+safety:
+  max_replies_per_account_per_day: 3
+  max_duplicate_similarity: 0.85

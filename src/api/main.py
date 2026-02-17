@@ -1,0 +1,68 @@
+"""FastAPI application entrypoint for RevFirst_Social foundation."""
+
+from __future__ import annotations
+
+from uuid import uuid4
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from src.core.config import get_settings
+from src.core.logger import bind_request_context, clear_request_context, get_logger
+from src.storage.db import test_connection as test_db_connection
+from src.storage.redis_client import test_connection as test_redis_connection
+
+
+settings = get_settings()
+logger = get_logger("revfirst.api")
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+
+
+@app.middleware("http")
+async def request_context_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id", str(uuid4()))
+    workspace_id = request.headers.get("x-workspace-id")
+    bind_request_context(request_id=request_id, workspace_id=workspace_id)
+
+    try:
+        response = await call_next(request)
+    finally:
+        clear_request_context()
+
+    response.headers["x-request-id"] = request_id
+    return response
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    logger.info("application_startup", env=settings.env, version=settings.app_version)
+
+
+@app.get("/health")
+def health() -> JSONResponse:
+    db_ok, db_error = test_db_connection()
+    redis_ok, redis_error = test_redis_connection()
+
+    healthy = db_ok and redis_ok
+    status = "ok" if healthy else "degraded"
+
+    payload = {
+        "status": status,
+        "env": settings.env,
+        "services": {
+            "database": {"ok": db_ok, "error": db_error},
+            "redis": {"ok": redis_ok, "error": redis_error},
+        },
+    }
+
+    return JSONResponse(content=payload, status_code=200 if healthy else 503)
+
+
+@app.get("/version")
+def version() -> dict[str, str]:
+    return {
+        "name": settings.app_name,
+        "version": settings.app_version,
+        "env": settings.env,
+    }

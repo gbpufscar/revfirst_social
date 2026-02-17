@@ -1,0 +1,303 @@
+# RevFirst_Social - Master Implementation Plan
+
+Version: 1.3  
+Status: Active (Living Document)  
+Last Updated: 2026-02-17  
+Canonical Authority: `/docs/PROJECT_CANONICAL.md`
+
+---
+
+## 1. Official Product Decision
+
+- RevFirst_Social is Multi-Tenant SaaS from day 1.
+- Initial operation uses one workspace (`revfirst`) with architecture ready for scale.
+- No structural refactor should be required to open paid onboarding.
+
+---
+
+## 2. Correct Execution Order (Official)
+
+1. Foundation SaaS
+2. Multi-Tenant Core
+3. Billing + Plan Enforcement
+4. Usage Tracking
+5. Ingestion Layer (Read-only)
+6. Domain Agents
+7. Publishing Engine
+8. Scheduler + Locks
+9. Telegram Seed + Daily Post
+10. Hardening + Observability
+
+Strategic sequence summary:
+
+`Foundation -> Isolation -> Billing -> Usage -> Ingestion -> Agents -> Publish -> Locks -> Intelligence -> Hardening`
+
+---
+
+## 3. Hard Architecture Boundaries
+
+Mandatory separation:
+- Domain never depends on Stripe.
+- Agents never depend on HTTP framework details.
+- Publisher never depends on Billing logic.
+- Billing never depends on Agents.
+
+---
+
+## 4. Non-Negotiable Cross-Cutting Requirements
+
+1. Authorization model:
+- Create `workspace_users` plus roles (`owner`, `admin`, `member`).
+- `users` alone is not sufficient for multi-tenant authorization.
+
+2. Tenant isolation by design:
+- Every domain table must include mandatory `workspace_id`.
+- Add composite indexes (`workspace_id`, `created_at`) in domain tables.
+- In PostgreSQL, apply RLS policies for tenant isolation.
+
+3. Secret handling:
+- Never store `api_keys` plaintext.
+- Store API keys and sensitive tokens as hash-only where applicable.
+- Support rotation and revocation.
+- Never log tokens or secrets.
+
+4. Stripe webhook idempotency:
+- Webhook processing must enforce unique `event_id`.
+- Duplicate events must be safely ignored after first successful processing.
+
+5. Plan-limit performance:
+- Maintain `usage_logs` plus daily aggregated usage per workspace.
+- `check_plan_limit(workspace_id)` must use aggregated reads, not brute-force counts.
+
+6. Multi-tenant scheduler safety:
+- Orchestrator must acquire lock per workspace before pipeline execution.
+- No mixed namespace execution and no duplicate concurrent run for same workspace.
+
+7. Migration discipline:
+- Alembic is mandatory from day 1.
+- No manual production schema drift.
+
+---
+
+## 5. Phase Roadmap
+
+### Phase 1 - Foundation SaaS
+Objective: system boots, isolates baseline infra, and is versionable.
+
+Scope:
+- Modular project structure.
+- Docker running.
+- FastAPI app up.
+- `GET /health` active.
+- PostgreSQL + Redis connectivity.
+- Connection pool and env-based config.
+- Alembic configured with migration pipeline.
+
+Done when:
+- `docker compose up` works.
+- `alembic upgrade head` works.
+- `/health` returns `200`.
+- Structured logs are active.
+
+### Phase 2 - Multi-Tenant Core
+Objective: implement tenant isolation and authorization core.
+
+Scope:
+- Create tables:
+  - `users`
+  - `workspaces`
+  - `workspace_users`
+  - `roles`
+  - `api_keys`
+- Mandatory `workspace_id` in domain entities.
+- Composite indexes (`workspace_id`, `created_at`).
+- PostgreSQL RLS enabled and tested.
+- Auth and permission stack:
+  - JWT
+  - middleware
+  - role enforcement
+  - protected endpoints
+
+Done when:
+- User can access only its own workspace data.
+- RLS blocks cross-workspace access.
+- Roles (`owner/admin/member`) are enforced.
+
+### Phase 3 - Billing Core
+Objective: enforce behavior limits through billing model, even before monetization.
+
+Scope:
+- Stripe client with sandbox tests.
+- Webhook idempotency base:
+  - `stripe_events` table
+  - unique `event_id`
+  - dedup working
+- Plan enforcement contract:
+  - `plans.yaml`
+  - `check_plan_limit()`
+  - early integration point with publisher path
+
+Done when:
+- Subscription event changes plan/status.
+- Plan changes effective limits.
+- Duplicate webhook does not create side effects.
+
+### Phase 4 - Usage Tracking
+Objective: plan enforcement with scalable reads.
+
+Scope:
+- `usage_logs` for action-level events.
+- `workspace_daily_usage` aggregation.
+- `check_plan_limit(workspace_id)` reads aggregation.
+
+Done when:
+- Limits are enforced correctly.
+- Queries are fast.
+- Usage logs are auditable.
+
+### Phase 5 - Ingestion Layer (Read-only)
+Objective: start touching X safely without publish risk.
+
+Scope:
+- Workspace-scoped OAuth for X.
+- Secure token handling.
+- Open-call ingestion pipeline.
+- Candidate storage with workspace namespace.
+- Intent classification and scoring with isolated logs.
+
+Done when:
+- Candidates are persisted per workspace.
+- No publish action occurs.
+- Flow is easy to debug.
+
+### Phase 6 - Domain Agents
+Objective: build pure agent logic with strict contracts.
+
+Scope:
+- Reply Writer.
+- Brand Consistency.
+- Anti-Cringe Guard.
+- Thread Detector.
+- Lead Tracker.
+- All agents return validated JSON payloads.
+- No direct publish calls.
+
+Done when:
+- Replies are generated.
+- Guards block invalid output.
+- Agent suite is fully unit tested in isolation.
+
+### Phase 7 - Publishing Engine
+Objective: controlled publication through a single gateway.
+
+Scope:
+- One Publisher component is the only X write path.
+- Plan check before publish.
+- Cooldown per thread/author.
+- Audit logging.
+
+Done when:
+- Publish works.
+- Plan and cooldown limits are respected.
+- Audit trail is complete.
+
+### Phase 8 - Scheduler + Locks
+Objective: safe multi-tenant orchestration at scale.
+
+Scope:
+- Redis lock per workspace with TTL.
+- Multi-tenant loop:
+  - iterate active workspaces
+  - acquire lock
+  - run workspace pipeline
+- Strict namespace isolation.
+
+Done when:
+- No race condition under concurrent runs.
+- No data mixing between workspaces.
+- Execution remains isolated.
+
+### Phase 9 - Telegram Seed + Daily Post
+Objective: integrate human seed intelligence.
+
+Scope:
+- Telegram webhook.
+- Style extractor.
+- Daily Post engine using seed memory.
+- Guard validation before queue/publish.
+
+Done when:
+- Seed is stored.
+- Daily post uses seed context.
+- Output passes brand and cringe guards.
+
+### Phase 10 - Hardening + Observability
+Objective: production stability before operational beta.
+
+Scope:
+- Sentry.
+- `GET /metrics`.
+- Rate limit by IP.
+- Basic load testing.
+- Stability checks.
+
+Done when:
+- 7 days stable run without critical failure.
+- No tenant data leakage.
+- No unresolved critical incidents.
+
+---
+
+## 6. Do Not Build Now
+
+- Do not build complex dashboard yet.
+- Do not build heavy frontend yet.
+- Do not open public onboarding yet.
+- Do not prematurely optimize architecture.
+- Do not split into microservices now.
+
+---
+
+## 7. SaaS MVP / Beta Operational Gate
+
+Operational beta is ready only when:
+- Multi-tenant core is active and isolated.
+- 1 workspace runs end-to-end safely.
+- Billing and plan enforcement are active.
+- Ingestion and publish operate with controls.
+- Usage and audit logs are reliable.
+- Scheduler runs with per-workspace locks.
+- Observability baseline is active.
+
+---
+
+## 8. Progress Tracking (Update at Every Phase Transition)
+
+Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
+
+| Phase | Name | Status | Started On | Completed On | Notes |
+|---|---|---|---|---|---|
+| 1 | Foundation SaaS | IN_PROGRESS | 2026-02-17 | - | Scaffold + local validation done (compose up, health/version, DB+Redis ok, alembic upgrade). Pending GitHub repo policy + CI run + Coolify deploy verification. |
+| 2 | Multi-Tenant Core | NOT_STARTED | - | - | - |
+| 3 | Billing Core | NOT_STARTED | - | - | - |
+| 4 | Usage Tracking | NOT_STARTED | - | - | - |
+| 5 | Ingestion Layer (Read-only) | NOT_STARTED | - | - | - |
+| 6 | Domain Agents | NOT_STARTED | - | - | - |
+| 7 | Publishing Engine | NOT_STARTED | - | - | - |
+| 8 | Scheduler + Locks | NOT_STARTED | - | - | - |
+| 9 | Telegram Seed + Daily Post | NOT_STARTED | - | - | - |
+| 10 | Hardening + Observability | NOT_STARTED | - | - | - |
+
+Update protocol:
+- At phase start: set `IN_PROGRESS` and fill `Started On`.
+- At phase completion: set `DONE`, fill `Completed On`, record objective evidence in `Notes`.
+- If blocked: set `BLOCKED` and describe unblock condition in `Notes`.
+
+---
+
+## 9. Change Log
+
+- 2026-02-17: Created living implementation plan with SaaS-ready controls.
+- 2026-02-17: Reordered official roadmap to Foundation-first sequence (Phase 1-10) and added completion gates, anti-scope list, and phase update protocol.
+- 2026-02-17: Phase 1 marked as IN_PROGRESS with initial foundation scaffold delivered.
+- 2026-02-17: Phase 1 scaffold validated locally with Docker, DB/Redis health, and Alembic baseline migration; external GitHub/Coolify checks pending.

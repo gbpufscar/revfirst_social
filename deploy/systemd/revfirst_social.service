@@ -1,0 +1,14 @@
+[Unit]
+Description=RevFirst Social Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/revfirst_social
+ExecStart=/usr/bin/python3 -m orchestrator.manager
+Restart=always
+RestartSec=5
+EnvironmentFile=/opt/revfirst_social/.env
+
+[Install]
+WantedBy=multi-user.target

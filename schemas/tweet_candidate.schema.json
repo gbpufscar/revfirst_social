@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TweetCandidate",
+  "type": "object",
+  "required": ["post_id", "author", "text", "created_at"],
+  "properties": {
+    "post_id": {"type": "string"},
+    "author": {"type": "string"},
+    "text": {"type": "string"},
+    "created_at": {"type": "string"}
+  },
+  "additionalProperties": false
+}

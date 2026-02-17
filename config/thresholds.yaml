@@ -1,0 +1,8 @@
+opportunity_score:
+  high: 0.8
+  medium: 0.6
+  low: 0.4
+intent_confidence:
+  minimum_for_reply: 0.65
+quality_score:
+  minimum_for_approval: 0.75

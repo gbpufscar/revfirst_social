@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Reply",
+  "type": "object",
+  "required": ["reply_to_id", "text", "quality_score"],
+  "properties": {
+    "reply_to_id": {"type": "string"},
+    "text": {"type": "string", "maxLength": 280},
+    "quality_score": {"type": "number", "minimum": 0, "maximum": 1}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Post",
+  "type": "object",
+  "required": ["text", "kind"],
+  "properties": {
+    "text": {"type": "string", "maxLength": 280},
+    "kind": {"type": "string", "enum": ["daily", "reply", "thread"]},
+    "source": {"type": "string"}
+  },
+  "additionalProperties": false
+}

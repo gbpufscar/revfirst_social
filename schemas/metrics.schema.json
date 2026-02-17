@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MetricsSnapshot",
+  "type": "object",
+  "required": ["date", "impressions", "engagement_rate"],
+  "properties": {
+    "date": {"type": "string"},
+    "impressions": {"type": "integer", "minimum": 0},
+    "engagement_rate": {"type": "number", "minimum": 0},
+    "replies": {"type": "integer", "minimum": 0},
+    "profile_visits": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": false
+}

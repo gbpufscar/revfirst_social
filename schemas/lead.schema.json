@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Lead",
+  "type": "object",
+  "required": ["handle", "priority"],
+  "properties": {
+    "handle": {"type": "string"},
+    "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+    "last_seen_at": {"type": "string"}
+  },
+  "additionalProperties": false
+}
