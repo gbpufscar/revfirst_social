@@ -20,6 +20,8 @@ dependencies = [
   "structlog",
   "alembic",
   "httpx",
+  "PyJWT",
+  "email-validator",
   "pyyaml"
 ]
 

@@ -8,7 +8,7 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from src.core.config import get_settings
-from src.storage.db import Base
+from src.storage.db import Base, load_models
 
 
 config = context.config
@@ -19,6 +19,7 @@ if config.config_file_name is not None:
 settings = get_settings()
 config.set_main_option("sqlalchemy.url", settings.database_url)
 
+load_models()
 target_metadata = Base.metadata
 
 

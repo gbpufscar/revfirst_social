@@ -7,7 +7,8 @@ ENV PORT=8000
 WORKDIR /app
 
 COPY requirements.txt requirements-dev.txt ./
-RUN pip install --no-cache-dir --upgrade pip \
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY alembic.ini ./

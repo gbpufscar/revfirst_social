@@ -5,7 +5,7 @@ from src.core.config import get_settings
 
 def test_requires_secret_key_in_production(monkeypatch) -> None:
     monkeypatch.setenv("ENV", "production")
-    monkeypatch.delenv("SECRET_KEY", raising=False)
+    monkeypatch.setenv("SECRET_KEY", "")
     get_settings.cache_clear()
 
     with pytest.raises(ValueError):

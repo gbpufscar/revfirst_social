@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     port: int = 8000
     app_name: str = "revfirst_social"
     app_version: str = "0.1.0"
+    jwt_algorithm: str = "HS256"
+    access_token_exp_minutes: int = 60
+    stripe_api_key: str = ""
+    stripe_webhook_secret: str = ""
+    stripe_signature_tolerance_seconds: int = 300
+    plans_file_path: str = "config/plans.yaml"
 
     model_config = SettingsConfigDict(
         env_file=".env",

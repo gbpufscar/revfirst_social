@@ -1,0 +1,8 @@
+free:
+  max_replies_per_day: 5
+  max_posts_per_day: 1
+
+pro:
+  max_replies_per_day: 30
+  max_posts_per_day: 2
+

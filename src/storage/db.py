@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Generator
+from typing import Generator, Optional, Tuple
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
@@ -38,10 +38,17 @@ def get_session() -> Generator[Session, None, None]:
         session.close()
 
 
-def test_connection() -> tuple[bool, str | None]:
+def test_connection() -> Tuple[bool, Optional[str]]:
     try:
         with get_engine().connect() as connection:
             connection.execute(text("SELECT 1"))
         return True, None
     except Exception as exc:  # pragma: no cover
         return False, str(exc)
+
+
+def load_models() -> None:
+    """Import ORM models so Base metadata contains all mapped tables."""
+
+    # Import side effect is intentional here.
+    import src.storage.models  # noqa: F401
