@@ -20,10 +20,21 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     jwt_algorithm: str = "HS256"
     access_token_exp_minutes: int = 60
+    token_encryption_key: str = ""
     stripe_api_key: str = ""
     stripe_webhook_secret: str = ""
     stripe_signature_tolerance_seconds: int = 300
     plans_file_path: str = "config/plans.yaml"
+    x_client_id: str = ""
+    x_client_secret: str = ""
+    x_redirect_uri: str = ""
+    x_token_url: str = "https://api.twitter.com/2/oauth2/token"
+    x_search_url: str = "https://api.twitter.com/2/tweets/search/recent"
+    x_api_timeout_seconds: int = 20
+    x_default_open_calls_query: str = (
+        "\"drop your saas\" OR \"share your startup\" OR \"what are you building\" "
+        "OR \"show your product\" lang:en -is:retweet"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
