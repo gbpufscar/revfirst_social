@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 import structlog
 
@@ -56,12 +56,12 @@ def configure_logging() -> None:
     _CONFIGURED = True
 
 
-def get_logger(name: str | None = None) -> structlog.BoundLogger:
+def get_logger(name: Optional[str] = None) -> structlog.BoundLogger:
     configure_logging()
     return structlog.get_logger(name)
 
 
-def bind_request_context(request_id: str, workspace_id: str | None = None) -> None:
+def bind_request_context(request_id: str, workspace_id: Optional[str] = None) -> None:
     structlog.contextvars.bind_contextvars(
         request_id=request_id,
         workspace_id=workspace_id,

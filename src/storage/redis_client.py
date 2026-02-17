@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Optional, Tuple
 
 from redis import Redis
 
@@ -15,7 +16,7 @@ def get_client() -> Redis:
     return Redis.from_url(settings.redis_url, decode_responses=True)
 
 
-def test_connection() -> tuple[bool, str | None]:
+def test_connection() -> Tuple[bool, Optional[str]]:
     try:
         get_client().ping()
         return True, None

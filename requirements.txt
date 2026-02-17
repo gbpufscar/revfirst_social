@@ -9,4 +9,6 @@ python-dotenv
 structlog
 alembic
 httpx
+PyJWT
+email-validator
 pyyaml

@@ -1,6 +1,6 @@
 # RevFirst_Social - Master Implementation Plan
 
-Version: 1.3  
+Version: 1.5  
 Status: Active (Living Document)  
 Last Updated: 2026-02-17  
 Canonical Authority: `/docs/PROJECT_CANONICAL.md`
@@ -277,10 +277,10 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 
 | Phase | Name | Status | Started On | Completed On | Notes |
 |---|---|---|---|---|---|
-| 1 | Foundation SaaS | IN_PROGRESS | 2026-02-17 | - | Scaffold + local validation done (compose up, health/version, DB+Redis ok, alembic upgrade). Pending GitHub repo policy + CI run + Coolify deploy verification. |
-| 2 | Multi-Tenant Core | NOT_STARTED | - | - | - |
-| 3 | Billing Core | NOT_STARTED | - | - | - |
-| 4 | Usage Tracking | NOT_STARTED | - | - | - |
+| 1 | Foundation SaaS | DONE | 2026-02-17 | 2026-02-17 | Scaffold done. Local validation passed (compose, DB/Redis, Alembic). GitHub governance active (protected main + required check + PR flow). Coolify deploy accepted by product decision after internal health/version + migration checks. |
+| 2 | Multi-Tenant Core | DONE | 2026-02-17 | 2026-02-17 | Added Alembic migration `20260217_0002` with `users`, `workspaces`, `workspace_users`, `roles`, `api_keys` (+ `workspace_events`), seeded roles, composite indexes, and PostgreSQL RLS policies. Delivered JWT auth + middleware + role-based dependencies and endpoints `POST /auth/login`, `POST /workspaces`, `GET /workspaces/{id}`. Added hash-based security helpers for passwords/API keys. Validation: `pytest` (18 passed) and `ruff` passed locally. |
+| 3 | Billing Core | DONE | 2026-02-17 | 2026-02-17 | Added Alembic migration `20260217_0003` with `subscriptions`, `stripe_events` (idempotent `event_id`), `usage_logs`, and `workspace_daily_usage`. Implemented `config/plans.yaml`, plan loading and `check_plan_limit()` on daily aggregates, plus `record_usage()`. Added Stripe webhook endpoint `POST /billing/webhook` with signature verification and idempotent processing. Validation: `pytest` (22 passed), `ruff` passed, Alembic upgrade/downgrade chain verified (`0001 -> 0003 -> base`). |
+| 4 | Usage Tracking | DONE | 2026-02-17 | 2026-02-17 | Implemented app-layer usage service (`consume_workspace_action`, `get_workspace_daily_usage`) on top of `usage_logs` + `workspace_daily_usage` aggregate model. Enforced transactional check->record flow with `PlanLimitExceededError` guard, ensuring limits use daily aggregation and not brute-force counts. Validation: `pytest` (25 passed), `ruff` passed, compile check passed. |
 | 5 | Ingestion Layer (Read-only) | NOT_STARTED | - | - | - |
 | 6 | Domain Agents | NOT_STARTED | - | - | - |
 | 7 | Publishing Engine | NOT_STARTED | - | - | - |
@@ -301,3 +301,11 @@ Update protocol:
 - 2026-02-17: Reordered official roadmap to Foundation-first sequence (Phase 1-10) and added completion gates, anti-scope list, and phase update protocol.
 - 2026-02-17: Phase 1 marked as IN_PROGRESS with initial foundation scaffold delivered.
 - 2026-02-17: Phase 1 scaffold validated locally with Docker, DB/Redis health, and Alembic baseline migration; external GitHub/Coolify checks pending.
+- 2026-02-17: GitHub governance completed for Phase 1 (repo published, branch protection enforced, required check `lint-test-build`, PR-based merge flow verified). Coolify manual verification remains.
+- 2026-02-17: Phase 1 marked as DONE after infrastructure, governance, migrations, and internal runtime validation were completed and accepted.
+- 2026-02-17: Phase 2 implementation completed with multi-tenant schema + RLS, workspace membership/role model, JWT auth and role enforcement, and protected workspace endpoints.
+- 2026-02-17: Phase 2 validation completed with local automated checks (`pytest` and `ruff`).
+- 2026-02-17: Phase 3 implemented with Stripe webhook idempotency (`stripe_events.event_id` unique), plans contract in `config/plans.yaml`, and plan-limit enforcement API (`check_plan_limit` + daily usage aggregation).
+- 2026-02-17: Phase 3 validated by test suite, lint, and Alembic migration chain checks.
+- 2026-02-17: Phase 4 implemented with application usage service consuming plan limits and writing both raw (`usage_logs`) and aggregated (`workspace_daily_usage`) usage records.
+- 2026-02-17: Phase 4 validated with dedicated tests for consume, limit-exceeded behavior, and daily aggregated reads.

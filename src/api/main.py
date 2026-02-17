@@ -7,10 +7,15 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from src.billing.webhooks import router as billing_router
+from src.auth.middleware import AUTH_CONTEXT_KEY, resolve_request_auth_context
+from src.auth.router import router as auth_router
 from src.core.config import get_settings
 from src.core.logger import bind_request_context, clear_request_context, get_logger
+from src.storage.db import load_models
 from src.storage.db import test_connection as test_db_connection
 from src.storage.redis_client import test_connection as test_redis_connection
+from src.workspaces.router import router as workspaces_router
 
 
 settings = get_settings()
@@ -22,7 +27,12 @@ app = FastAPI(title=settings.app_name, version=settings.app_version)
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id", str(uuid4()))
+    auth_context = resolve_request_auth_context(request)
+    setattr(request.state, AUTH_CONTEXT_KEY, auth_context)
+
     workspace_id = request.headers.get("x-workspace-id")
+    if workspace_id is None and auth_context is not None:
+        workspace_id = auth_context.workspace_id
     bind_request_context(request_id=request_id, workspace_id=workspace_id)
 
     try:
@@ -36,6 +46,7 @@ async def request_context_middleware(request: Request, call_next):
 
 @app.on_event("startup")
 def on_startup() -> None:
+    load_models()
     logger.info("application_startup", env=settings.env, version=settings.app_version)
 
 
@@ -66,3 +77,8 @@ def version() -> dict[str, str]:
         "version": settings.app_version,
         "env": settings.env,
     }
+
+
+app.include_router(auth_router)
+app.include_router(workspaces_router)
+app.include_router(billing_router)
