@@ -255,3 +255,87 @@ class WorkspaceDailyUsage(Base):
         Index("ix_workspace_daily_usage_workspace_created_at", "workspace_id", "created_at"),
         Index("ix_workspace_daily_usage_lookup", "workspace_id", "usage_date", "action"),
     )
+
+
+class XOAuthToken(Base):
+    __tablename__ = "x_oauth_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="x")
+    access_token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    refresh_token_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    refresh_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    token_type: Mapped[str] = mapped_column(String(32), nullable=False, default="bearer")
+    scope: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "provider", name="uq_x_oauth_tokens_workspace_provider"),
+        Index("ix_x_oauth_tokens_workspace_created_at", "workspace_id", "created_at"),
+    )
+
+
+class IngestionCandidate(Base):
+    __tablename__ = "ingestion_candidates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="x")
+    source_tweet_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    conversation_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    author_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    author_handle: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    intent: Mapped[str] = mapped_column(String(32), nullable=False)
+    opportunity_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ingested")
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "source",
+            "source_tweet_id",
+            name="uq_ingestion_candidates_workspace_source_tweet",
+        ),
+        Index("ix_ingestion_candidates_workspace_created_at", "workspace_id", "created_at"),
+        Index(
+            "ix_ingestion_candidates_workspace_intent_score",
+            "workspace_id",
+            "intent",
+            "opportunity_score",
+        ),
+    )
