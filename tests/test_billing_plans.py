@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from src.billing.plans import check_plan_limit, load_plans, record_usage
 from src.storage.db import Base, load_models
-from src.storage.models import Workspace
+from src.storage.models import Workspace, WorkspaceControlSetting
 
 
 def _build_session() -> Session:
@@ -72,5 +72,57 @@ def test_check_plan_limit_uses_daily_aggregation(monkeypatch) -> None:
         assert decision.limit == 5
         assert decision.used == 5
         assert decision.remaining == 0
+    finally:
+        session.close()
+
+
+def test_check_plan_limit_prefers_active_control_override(monkeypatch) -> None:
+    monkeypatch.setenv("PLANS_FILE_PATH", "config/plans.yaml")
+    load_plans.cache_clear()
+
+    session = _build_session()
+    try:
+        workspace = Workspace(
+            id=str(uuid.uuid4()),
+            name="billing-override",
+            plan="free",
+            subscription_status="active",
+        )
+        session.add(workspace)
+        session.commit()
+
+        session.add(
+            WorkspaceControlSetting(
+                id=str(uuid.uuid4()),
+                workspace_id=workspace.id,
+                is_paused=False,
+                channels_json='{"x":true,"email":false,"blog":false,"instagram":false}',
+                reply_limit_override=8,
+                limit_override_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        session.commit()
+
+        for _ in range(6):
+            record_usage(
+                session,
+                workspace_id=workspace.id,
+                action="publish_reply",
+                amount=1,
+                payload={"source": "test"},
+            )
+        session.commit()
+
+        decision = check_plan_limit(
+            session,
+            workspace_id=workspace.id,
+            action="publish_reply",
+            requested=1,
+            usage_date=datetime.now(timezone.utc).date(),
+        )
+        assert decision.allowed is True
+        assert decision.limit == 8
+        assert decision.used == 6
+        assert decision.plan.endswith(":override")
     finally:
         session.close()
