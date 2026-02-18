@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     publish_thread_cooldown_minutes: int = 45
     publish_author_cooldown_minutes: int = 30
     publish_max_text_chars: int = 280
+    scheduler_workspace_lock_ttl_seconds: int = 300
+    scheduler_max_workspaces_per_run: int = 50
+    scheduler_candidate_evaluation_limit: int = 5
 
     model_config = SettingsConfigDict(
         env_file=".env",
