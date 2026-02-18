@@ -286,7 +286,7 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 | 7 | Publishing Engine | DONE | 2026-02-17 | 2026-02-17 | Added publishing engine as single X write path via `/publishing` routes and `src/publishing/service.py`. Implemented plan check before publish, thread/author cooldown enforcement, and full audit trail (`publish_audit_logs` + `publish_cooldowns`) with PostgreSQL RLS through Alembic `20260217_0005`. Validation: unit/integration tests for publish success, cooldown block, and plan-limit block; `pytest` and `ruff` passed; migration chain validated through `0005`. |
 | 8 | Scheduler + Locks | DONE | 2026-02-18 | 2026-02-18 | Added orchestrator stack under `src/orchestrator` with Redis workspace lock manager (`SET NX EX` + safe token release), multi-tenant scheduler loop, per-workspace DB context isolation, and scheduler audit events in `workspace_events`. Added CLI runner `python -m src.orchestrator.manager` and test coverage for lock-skip, failure recovery, and execution isolation. |
 | 9 | Telegram Seed + Daily Post | DONE | 2026-02-18 | 2026-02-18 | Added Telegram integration (`/integrations/telegram`) with webhook secret validation, seed persistence, style extraction memory, and workspace-scoped listing. Added Daily Post engine (`/daily-post`) with guard validation (Brand Consistency + Anti-Cringe) and optional auto-publish via existing publishing engine. Added Alembic migration `20260218_0006` for `telegram_seeds` and `daily_post_drafts` with PostgreSQL RLS. |
-| 10 | Hardening + Observability | NOT_STARTED | - | - | - |
+| 10 | Hardening + Observability | DONE | 2026-02-18 | 2026-02-18 | Added Sentry bootstrap (`src/core/observability.py`), Prometheus-style `GET /metrics`, production IP rate limit middleware with limit headers and block metrics, plus basic load test script (`scripts/loadtest_basic.py`) and Makefile target. Validation: new tests for metrics/rate-limit/observability, full `pytest` and `ruff` green. |
 
 Update protocol:
 - At phase start: set `IN_PROGRESS` and fill `Started On`.
@@ -319,3 +319,5 @@ Update protocol:
 - 2026-02-18: Phase 8 validated with scheduler lock/isolation tests and integrated CLI run path for operations.
 - 2026-02-18: Phase 9 implemented with Telegram seed ingestion, style memory extraction, and guarded daily post generation with optional publish path.
 - 2026-02-18: Phase 9 validated with API integration tests (webhook auth, seed persistence, guarded generation, and auto-publish usage accounting) plus migration contract checks.
+- 2026-02-18: Phase 10 implemented with Sentry bootstrap, `/metrics` endpoint, production IP rate limiting middleware, and basic load-test script/target.
+- 2026-02-18: Phase 10 validated with dedicated tests for observability stack and successful lint/test suite.

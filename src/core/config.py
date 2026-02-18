@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     daily_post_seed_limit: int = 10
     daily_post_default_topic: str = "builder growth"
     daily_post_auto_publish_default: bool = False
+    sentry_dsn: str = ""
+    sentry_traces_sample_rate: float = 0.0
+    metrics_enabled: bool = True
+    ip_rate_limit_enabled: bool = True
+    ip_rate_limit_requests_per_window: int = 120
+    ip_rate_limit_window_seconds: int = 60
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -58,6 +64,12 @@ class Settings(BaseSettings):
 def _validate(settings: Settings) -> Settings:
     if settings.env.lower() in {"prod", "production"} and not settings.secret_key:
         raise ValueError("SECRET_KEY is required when ENV=production.")
+    if settings.sentry_traces_sample_rate < 0 or settings.sentry_traces_sample_rate > 1:
+        raise ValueError("SENTRY_TRACES_SAMPLE_RATE must be between 0 and 1.")
+    if settings.ip_rate_limit_requests_per_window <= 0:
+        raise ValueError("IP_RATE_LIMIT_REQUESTS_PER_WINDOW must be positive.")
+    if settings.ip_rate_limit_window_seconds <= 0:
+        raise ValueError("IP_RATE_LIMIT_WINDOW_SECONDS must be positive.")
     return settings
 
 

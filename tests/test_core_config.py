@@ -28,3 +28,16 @@ def test_loads_environment_values(monkeypatch) -> None:
     assert settings.redis_url.endswith("/9")
 
     get_settings.cache_clear()
+
+
+def test_rejects_invalid_observability_limits(monkeypatch) -> None:
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setenv("SENTRY_TRACES_SAMPLE_RATE", "1.2")
+    monkeypatch.setenv("IP_RATE_LIMIT_REQUESTS_PER_WINDOW", "0")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError):
+        get_settings()
+
+    get_settings.cache_clear()

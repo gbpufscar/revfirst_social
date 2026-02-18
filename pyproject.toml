@@ -22,7 +22,8 @@ dependencies = [
   "httpx",
   "PyJWT",
   "email-validator",
-  "pyyaml"
+  "pyyaml",
+  "sentry-sdk[fastapi]"
 ]
 
 [project.optional-dependencies]

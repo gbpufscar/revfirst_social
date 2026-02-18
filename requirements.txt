@@ -12,3 +12,4 @@ httpx
 PyJWT
 email-validator
 pyyaml
+sentry-sdk[fastapi]
