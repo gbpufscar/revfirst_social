@@ -1,0 +1,114 @@
+"""In-process metrics collector with Prometheus text exposition."""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from threading import Lock
+import time
+from typing import Dict, Tuple
+
+
+_lock = Lock()
+_started_at = time.time()
+
+_http_requests_total: Dict[Tuple[str, str, str], int] = defaultdict(int)
+_http_request_duration_sum: Dict[Tuple[str, str], float] = defaultdict(float)
+_http_request_duration_count: Dict[Tuple[str, str], int] = defaultdict(int)
+_rate_limit_block_total: Dict[str, int] = defaultdict(int)
+
+
+def _escape_label(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def record_http_request(*, method: str, path: str, status_code: int, duration_seconds: float) -> None:
+    status = str(status_code)
+    method_label = method.upper()
+    path_label = path or "unknown"
+    duration = max(duration_seconds, 0.0)
+
+    with _lock:
+        _http_requests_total[(method_label, path_label, status)] += 1
+        _http_request_duration_sum[(method_label, path_label)] += duration
+        _http_request_duration_count[(method_label, path_label)] += 1
+
+
+def record_rate_limit_block(*, kind: str) -> None:
+    with _lock:
+        _rate_limit_block_total[kind] += 1
+
+
+def render_prometheus_metrics(*, app_name: str, app_version: str, env: str) -> str:
+    uptime = max(time.time() - _started_at, 0.0)
+
+    with _lock:
+        http_total = dict(_http_requests_total)
+        duration_sum = dict(_http_request_duration_sum)
+        duration_count = dict(_http_request_duration_count)
+        rate_limit_total = dict(_rate_limit_block_total)
+
+    lines = [
+        "# HELP revfirst_build_info Build metadata.",
+        "# TYPE revfirst_build_info gauge",
+        (
+            f'revfirst_build_info{{app_name="{_escape_label(app_name)}",'
+            f'version="{_escape_label(app_version)}",env="{_escape_label(env)}"}} 1'
+        ),
+        "# HELP revfirst_process_uptime_seconds Process uptime in seconds.",
+        "# TYPE revfirst_process_uptime_seconds gauge",
+        f"revfirst_process_uptime_seconds {uptime:.6f}",
+        "# HELP revfirst_http_requests_total Total HTTP requests.",
+        "# TYPE revfirst_http_requests_total counter",
+    ]
+
+    for (method, path, status), value in sorted(http_total.items()):
+        lines.append(
+            (
+                f'revfirst_http_requests_total{{method="{_escape_label(method)}",'
+                f'path="{_escape_label(path)}",status="{_escape_label(status)}"}} {value}'
+            )
+        )
+
+    lines.extend(
+        [
+            "# HELP revfirst_http_request_duration_seconds Request duration summary.",
+            "# TYPE revfirst_http_request_duration_seconds summary",
+        ]
+    )
+    for (method, path), value in sorted(duration_sum.items()):
+        lines.append(
+            (
+                f'revfirst_http_request_duration_seconds_sum{{method="{_escape_label(method)}",'
+                f'path="{_escape_label(path)}"}} {value:.6f}'
+            )
+        )
+    for (method, path), value in sorted(duration_count.items()):
+        lines.append(
+            (
+                f'revfirst_http_request_duration_seconds_count{{method="{_escape_label(method)}",'
+                f'path="{_escape_label(path)}"}} {value}'
+            )
+        )
+
+    lines.extend(
+        [
+            "# HELP revfirst_rate_limit_block_total Requests blocked by rate limiting.",
+            "# TYPE revfirst_rate_limit_block_total counter",
+        ]
+    )
+    for kind, value in sorted(rate_limit_total.items()):
+        lines.append(f'revfirst_rate_limit_block_total{{kind="{_escape_label(kind)}"}} {value}')
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def reset_metrics_for_tests() -> None:
+    global _started_at
+    with _lock:
+        _http_requests_total.clear()
+        _http_request_duration_sum.clear()
+        _http_request_duration_count.clear()
+        _rate_limit_block_total.clear()
+    _started_at = time.time()
+

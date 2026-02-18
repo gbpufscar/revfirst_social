@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from src.billing.webhooks import router as billing_router
 from src.auth.middleware import AUTH_CONTEXT_KEY, resolve_request_auth_context
 from src.auth.router import router as auth_router
 from src.core.config import get_settings
 from src.core.logger import bind_request_context, clear_request_context, get_logger
+from src.core.metrics import record_http_request, record_rate_limit_block, render_prometheus_metrics
+from src.core.observability import init_sentry
+from src.core.rate_limit import RateLimitDecision, get_ip_rate_limiter
 from src.daily_post.router import router as daily_post_router
 from src.ingestion.router import router as ingestion_router
 from src.integrations.telegram.router import router as telegram_integration_router
@@ -29,8 +33,31 @@ logger = get_logger("revfirst.api")
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 
 
+def _resolve_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        first = forwarded_for.split(",")[0].strip()
+        if first:
+            return first
+
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _apply_rate_limit_headers(response: Response, decision: RateLimitDecision) -> None:
+    response.headers["x-rate-limit-limit"] = str(decision.limit)
+    response.headers["x-rate-limit-remaining"] = str(decision.remaining)
+    response.headers["x-rate-limit-reset"] = str(decision.reset_seconds)
+
+
 @app.middleware("http")
 async def request_context_middleware(request: Request, call_next):
+    started_at = perf_counter()
     request_id = request.headers.get("x-request-id", str(uuid4()))
     auth_context = resolve_request_auth_context(request)
     setattr(request.state, AUTH_CONTEXT_KEY, auth_context)
@@ -40,11 +67,43 @@ async def request_context_middleware(request: Request, call_next):
         workspace_id = auth_context.workspace_id
     bind_request_context(request_id=request_id, workspace_id=workspace_id)
 
+    response = None
+    decision = None
+    status_code = 500
+
     try:
-        response = await call_next(request)
+        if settings.ip_rate_limit_enabled and settings.env.lower() in {"prod", "production"}:
+            limiter = get_ip_rate_limiter()
+            decision = limiter.check(ip=_resolve_client_ip(request))
+            if not decision.allowed:
+                record_rate_limit_block(kind="ip")
+                response = JSONResponse(
+                    status_code=429,
+                    content={
+                        "detail": "Rate limit exceeded",
+                        "limit": decision.limit,
+                        "remaining": decision.remaining,
+                        "reset_seconds": decision.reset_seconds,
+                    },
+                )
+            else:
+                response = await call_next(request)
+        else:
+            response = await call_next(request)
+        status_code = int(response.status_code)
     finally:
+        duration = perf_counter() - started_at
+        if settings.metrics_enabled:
+            record_http_request(
+                method=request.method,
+                path=request.url.path,
+                status_code=status_code,
+                duration_seconds=duration,
+            )
         clear_request_context()
 
+    if decision is not None:
+        _apply_rate_limit_headers(response, decision)
     response.headers["x-request-id"] = request_id
     return response
 
@@ -52,7 +111,15 @@ async def request_context_middleware(request: Request, call_next):
 @app.on_event("startup")
 def on_startup() -> None:
     load_models()
-    logger.info("application_startup", env=settings.env, version=settings.app_version)
+    sentry_enabled = init_sentry()
+    logger.info(
+        "application_startup",
+        env=settings.env,
+        version=settings.app_version,
+        sentry_enabled=sentry_enabled,
+        metrics_enabled=settings.metrics_enabled,
+        ip_rate_limit_enabled=settings.ip_rate_limit_enabled,
+    )
 
 
 @app.get("/health")
@@ -82,6 +149,22 @@ def version() -> dict[str, str]:
         "version": settings.app_version,
         "env": settings.env,
     }
+
+
+@app.get("/metrics")
+def metrics() -> PlainTextResponse:
+    if not settings.metrics_enabled:
+        return PlainTextResponse("metrics disabled\n", status_code=404)
+
+    payload = render_prometheus_metrics(
+        app_name=settings.app_name,
+        app_version=settings.app_version,
+        env=settings.env,
+    )
+    return PlainTextResponse(
+        payload,
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 app.include_router(auth_router)

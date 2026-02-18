@@ -30,7 +30,14 @@ make up
 API endpoints:
 - `GET http://localhost:${APP_PORT:-18000}/health`
 - `GET http://localhost:${APP_PORT:-18000}/version`
+- `GET http://localhost:${APP_PORT:-18000}/metrics`
+
+Basic load test:
+```bash
+make loadtest
+```
 
 ## Docs
 - Canonical authority: `docs/PROJECT_CANONICAL.md`
 - Execution roadmap: `docs/MASTER_IMPLEMENTATION_PLAN.md`
+- Observability baseline: `docs/OBSERVABILITY.md`

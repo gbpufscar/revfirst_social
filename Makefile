@@ -1,7 +1,7 @@
 COMPOSE_FILE=deploy/docker-compose.yml
 COMPOSE=docker compose -f $(COMPOSE_FILE)
 
-.PHONY: up down migrate test lint build
+.PHONY: up down migrate test lint build loadtest
 
 up:
 	$(COMPOSE) up --build -d
@@ -20,3 +20,6 @@ lint:
 
 build:
 	docker build -f deploy/Dockerfile .
+
+loadtest:
+	python3 scripts/loadtest_basic.py --url http://localhost:$${APP_PORT:-18000}/health
