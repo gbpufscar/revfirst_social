@@ -1,8 +1,8 @@
 # RevFirst_Social - Master Implementation Plan
 
-Version: 1.5  
+Version: 1.6  
 Status: Active (Living Document)  
-Last Updated: 2026-02-17  
+Last Updated: 2026-02-18  
 Canonical Authority: `/docs/PROJECT_CANONICAL.md`
 
 ---
@@ -284,7 +284,7 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 | 5 | Ingestion Layer (Read-only) | DONE | 2026-02-17 | 2026-02-17 | Added Alembic migration `20260217_0004` with `x_oauth_tokens` (workspace-scoped, hash + encrypted token fields) and `ingestion_candidates` (workspace namespace + intent/score indexing), both with PostgreSQL RLS policies. Implemented X OAuth endpoints (`/integrations/x/oauth/*`) and read-only ingestion endpoints (`POST /ingestion/open-calls/run`, `GET /ingestion/candidates/{workspace_id}`) with workspace-scoped auth. Added open-call intent classification and opportunity scoring pipeline without any publish path. Validation: `pytest` and `ruff` passed, migration chain validated through `0004`. |
 | 6 | Domain Agents | DONE | 2026-02-17 | 2026-02-17 | Added pure domain agents under `src/domain/agents` (Reply Writer, Brand Consistency, Anti-Cringe Guard, Thread Detector, Lead Tracker) with strict Pydantic JSON contracts and composition pipeline, without HTTP/Stripe/publish dependencies. Validation: dedicated unit tests for each agent + pipeline, `pytest` (37 passed) and `ruff` passed. |
 | 7 | Publishing Engine | DONE | 2026-02-17 | 2026-02-17 | Added publishing engine as single X write path via `/publishing` routes and `src/publishing/service.py`. Implemented plan check before publish, thread/author cooldown enforcement, and full audit trail (`publish_audit_logs` + `publish_cooldowns`) with PostgreSQL RLS through Alembic `20260217_0005`. Validation: unit/integration tests for publish success, cooldown block, and plan-limit block; `pytest` and `ruff` passed; migration chain validated through `0005`. |
-| 8 | Scheduler + Locks | NOT_STARTED | - | - | - |
+| 8 | Scheduler + Locks | DONE | 2026-02-18 | 2026-02-18 | Added orchestrator stack under `src/orchestrator` with Redis workspace lock manager (`SET NX EX` + safe token release), multi-tenant scheduler loop, per-workspace DB context isolation, and scheduler audit events in `workspace_events`. Added CLI runner `python -m src.orchestrator.manager` and test coverage for lock-skip, failure recovery, and execution isolation. |
 | 9 | Telegram Seed + Daily Post | NOT_STARTED | - | - | - |
 | 10 | Hardening + Observability | NOT_STARTED | - | - | - |
 
@@ -315,3 +315,5 @@ Update protocol:
 - 2026-02-17: Phase 6 validated with isolated agent tests and end-to-end domain pipeline contract checks.
 - 2026-02-17: Phase 7 implemented with a single publishing engine path to X, plan checks before publish, cooldown guards, and persistent publish audit logs.
 - 2026-02-17: Phase 7 validated with API-level publish tests (success, cooldown block, plan-limit block) and migration contract checks.
+- 2026-02-18: Phase 8 implemented with workspace-level Redis locks and multi-tenant scheduler orchestration (`src/orchestrator/*`).
+- 2026-02-18: Phase 8 validated with scheduler lock/isolation tests and integrated CLI run path for operations.
