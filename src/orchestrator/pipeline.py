@@ -7,6 +7,7 @@ from typing import Any, Dict
 from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
+from src.core.metrics import record_replies_generated, record_reply_blocked
 from src.domain.agents.pipeline import evaluate_candidate_bundle
 from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
 from src.integrations.x.service import get_workspace_x_access_token
@@ -46,9 +47,13 @@ def run_workspace_pipeline(
     )
 
     eligible = 0
+    if candidates:
+        record_replies_generated(workspace_id=workspace_id, count=len(candidates))
+
     for candidate in candidates:
         bundle = evaluate_candidate_bundle(
             {
+                "workspace_id": workspace_id,
                 "source_tweet_id": candidate.source_tweet_id,
                 "conversation_id": candidate.conversation_id,
                 "author_id": candidate.author_id,
@@ -63,6 +68,11 @@ def run_workspace_pipeline(
         cringe_ok = bool(bundle["cringe_guard"]["passed"])
         if brand_ok and cringe_ok:
             eligible += 1
+        else:
+            if not brand_ok:
+                record_reply_blocked(workspace_id=workspace_id, reason="brand_guard")
+            if not cringe_ok:
+                record_reply_blocked(workspace_id=workspace_id, reason="cringe_guard")
 
     return {
         "status": "executed",
@@ -74,4 +84,3 @@ def run_workspace_pipeline(
         "evaluated_candidates": len(candidates),
         "eligible_reply_candidates": eligible,
     }
-

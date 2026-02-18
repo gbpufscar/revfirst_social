@@ -10,6 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.core.logger import get_logger
+from src.core.observability import capture_exception, sentry_scope
+from src.core.runtime import load_runtime_config
 from src.orchestrator.locks import WorkspaceLockManager
 from src.storage.models import Workspace, WorkspaceEvent
 from src.storage.tenant import reset_workspace_context, set_workspace_context
@@ -56,6 +58,13 @@ class WorkspaceScheduler:
         self._pipeline_runner = pipeline_runner
 
     def list_active_workspace_ids(self, *, limit: int | None = None) -> List[str]:
+        runtime = load_runtime_config()
+        if runtime.single_workspace_mode:
+            if not runtime.primary_workspace_id:
+                logger.error("single_workspace_mode_enabled_without_primary_workspace")
+                return []
+            return [runtime.primary_workspace_id]
+
         with self._session_factory() as session:
             statement = (
                 select(Workspace.id)
@@ -86,16 +95,18 @@ class WorkspaceScheduler:
                 continue
 
             try:
-                details = self._run_workspace_pipeline(workspace_id)
-                executed += 1
-                runs.append(WorkspaceRunSummary(workspace_id=workspace_id, status="executed", details=details))
-                self._record_scheduler_event(workspace_id=workspace_id, status="executed", details=details)
-                logger.info("workspace_scheduler_executed", workspace_id=workspace_id)
+                with sentry_scope(workspace_id=workspace_id):
+                    details = self._run_workspace_pipeline(workspace_id)
+                    executed += 1
+                    runs.append(WorkspaceRunSummary(workspace_id=workspace_id, status="executed", details=details))
+                    self._record_scheduler_event(workspace_id=workspace_id, status="executed", details=details)
+                    logger.info("workspace_scheduler_executed", workspace_id=workspace_id)
             except Exception as exc:
                 failed += 1
                 details = {"error": str(exc)}
                 runs.append(WorkspaceRunSummary(workspace_id=workspace_id, status="failed", details=details))
                 self._record_scheduler_event(workspace_id=workspace_id, status="failed", details=details)
+                capture_exception(exc)
                 logger.error("workspace_scheduler_failed", workspace_id=workspace_id, error=str(exc))
             finally:
                 lock.release()
@@ -134,4 +145,3 @@ class WorkspaceScheduler:
                 session.commit()
             finally:
                 reset_workspace_context(session)
-

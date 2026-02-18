@@ -1,6 +1,6 @@
 # RevFirst_Social - Master Implementation Plan
 
-Version: 1.6  
+Version: 1.9  
 Status: Active (Living Document)  
 Last Updated: 2026-02-18  
 Canonical Authority: `/docs/PROJECT_CANONICAL.md`
@@ -27,10 +27,18 @@ Canonical Authority: `/docs/PROJECT_CANONICAL.md`
 8. Scheduler + Locks
 9. Telegram Seed + Daily Post
 10. Hardening + Observability
+11. Single-Workspace Excellence
+12. Control Plane via Telegram (Priority)
+13. ContentObject + Channel Abstraction
+14. Email Module (Real Publisher)
+15. Blog Module (Real Publisher)
+16. Instagram Module (Real Publisher)
+17. Controlled Beta (2-5 workspaces)
+18. Enterprise Hardening
 
 Strategic sequence summary:
 
-`Foundation -> Isolation -> Billing -> Usage -> Ingestion -> Agents -> Publish -> Locks -> Intelligence -> Hardening`
+`Foundation -> Isolation -> Billing -> Usage -> Ingestion -> Agents -> Publish -> Locks -> Intelligence -> Hardening -> Excellence -> Control -> Abstraction -> Channels -> Beta -> Enterprise`
 
 ---
 
@@ -246,6 +254,158 @@ Done when:
 - No tenant data leakage.
 - No unresolved critical incidents.
 
+### Phase 11 - Single-Workspace Excellence (30-day window)
+Objective: perfect operation in one real workspace before scaling.
+
+Scope:
+- Add `config/runtime.yaml`:
+  - `primary_workspace_id`
+  - `single_workspace_mode`
+- Scheduler behavior:
+  - if `single_workspace_mode=true`, run only `primary_workspace_id`
+  - if `false`, iterate active workspaces
+- Add business counters:
+  - `revfirst_replies_generated_total{workspace_id}`
+  - `revfirst_replies_published_total{workspace_id}`
+  - `revfirst_reply_blocked_total{workspace_id,reason}`
+  - `revfirst_daily_post_published_total{workspace_id}`
+  - `revfirst_seed_used_total{workspace_id}`
+  - `revfirst_publish_errors_total{workspace_id,channel}`
+- Propagate `workspace_id` into Sentry context.
+- Create operational validation document (`docs/OPERATIONAL_VALIDATION.md`).
+
+Mandatory improvements in this phase:
+- Define a canonical queue contract (`QueueItem`) before Control Plane commands.
+- Define config precedence:
+  - `ENV` > temporary override > `runtime.yaml` > defaults.
+
+Done when:
+- Scheduler isolates execution to one workspace when configured.
+- New counters are visible on `/metrics`.
+- 30-day validation template exists and is actively used.
+
+### Phase 12 - Control Plane via Telegram (Priority)
+Objective: run the system from Telegram as command center with strict governance.
+
+Scope:
+- Create control module:
+  - `src/control/telegram_bot.py`
+  - `src/control/command_router.py`
+  - `src/control/command_schema.py`
+  - `src/control/security.py`
+  - `src/control/formatters.py`
+  - `src/control/handlers/*`
+- Security:
+  - whitelist Telegram IDs
+  - enforce workspace role permissions
+  - map command to allowed roles
+- Create `admin_actions` table with full command audit.
+- Implement commands:
+  - `/help`, `/status`, `/metrics`
+  - `/queue`, `/approve`, `/reject`
+  - `/pause`, `/resume`
+  - `/run <pipeline>`
+  - `/channel enable|disable`
+  - `/limit` override
+  - `/seed`
+
+Mandatory improvements in this phase:
+- Add `global_kill_switch` in addition to workspace pause.
+- Enforce idempotency:
+  - `/approve <id>` cannot publish twice
+  - `/run <pipeline>` cannot duplicate active run
+- Add `dry_run=true` support to `/run`.
+- Extend `admin_actions` payload with:
+  - `status`
+  - `result_summary`
+  - `error`
+  - `duration_ms`
+  - `request_id`
+  - `idempotency_key`
+- Create permission matrix doc: `docs/CONTROL_PLANE_PERMISSIONS.md`.
+
+Done when:
+- Unauthorized users always receive `unauthorized`.
+- Every admin command emits audit trail.
+- Pause and kill switch effectively stop execution.
+- Control commands are covered by tests and pass CI.
+
+### Phase 13 - ContentObject + Channel Abstraction
+Objective: prepare multichannel without duplicating intelligence.
+
+Scope:
+- Create canonical `ContentObject` model in domain.
+- Update Reply Writer and Daily Post to return `ContentObject`.
+- Add channel adapters:
+  - `src/channels/base.py`
+  - `src/channels/x/*`
+  - `src/channels/email/*` (stub)
+  - `src/channels/blog/*` (stub)
+  - `src/channels/instagram/*` (stub)
+- Add channel router with feature-flag and limit awareness.
+
+Done when:
+- X publish path still works unchanged.
+- Email/blog/instagram generate preview payloads without publishing.
+- Router respects feature flags and pause controls.
+
+### Phase 14 - Email Module (Real)
+Objective: enable real email publishing from existing abstraction.
+
+Scope:
+- Integrate one provider (Resend, SES, or SendGrid).
+- Add formatter + publisher implementation.
+- Add Telegram command compatibility for email channel controls.
+
+Done when:
+- Email channel can publish with audit + limits + approval flow.
+
+### Phase 15 - Blog Module (Real)
+Objective: enable blog publishing and repurpose engine.
+
+Scope:
+- Integrate CMS/webhook publish path.
+- Add content repurpose flow from thread/seed to long-form.
+
+Done when:
+- Blog publish works with queue/approval/audit and rollback-safe behavior.
+
+### Phase 16 - Instagram Module (Real)
+Objective: enable Instagram publishing and basic calendar controls.
+
+Scope:
+- Integrate Meta Graph API.
+- Add formatter for caption/hashtags.
+- Add scheduling hooks in orchestration.
+
+Done when:
+- Instagram publish flow is stable under approval and limit checks.
+
+### Phase 17 - Controlled Beta (2-5 workspaces)
+Objective: expand safely with feature flags and observability.
+
+Scope:
+- Onboard 2-5 workspaces with staged rollout.
+- Enable channel features progressively by flag.
+- Track tenant isolation and operational quality metrics.
+
+Done when:
+- No cross-workspace leakage.
+- No unresolved critical incidents during beta window.
+
+### Phase 18 - Enterprise Hardening
+Objective: finalize enterprise-grade controls after product behavior is stable.
+
+Scope:
+- Advanced backups and restore drills.
+- Audit trail expansion and retention policies.
+- Configuration and strategy versioning.
+- Compliance-grade operational controls.
+
+Done when:
+- Recovery and audit procedures are formally verified.
+- System meets enterprise reliability and governance requirements.
+
 ---
 
 ## 6. Do Not Build Now
@@ -255,6 +415,7 @@ Done when:
 - Do not open public onboarding yet.
 - Do not prematurely optimize architecture.
 - Do not split into microservices now.
+- Do not enable real multi-channel publishing before Phase 13 baseline is stable.
 
 ---
 
@@ -286,7 +447,15 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 | 7 | Publishing Engine | DONE | 2026-02-17 | 2026-02-17 | Added publishing engine as single X write path via `/publishing` routes and `src/publishing/service.py`. Implemented plan check before publish, thread/author cooldown enforcement, and full audit trail (`publish_audit_logs` + `publish_cooldowns`) with PostgreSQL RLS through Alembic `20260217_0005`. Validation: unit/integration tests for publish success, cooldown block, and plan-limit block; `pytest` and `ruff` passed; migration chain validated through `0005`. |
 | 8 | Scheduler + Locks | DONE | 2026-02-18 | 2026-02-18 | Added orchestrator stack under `src/orchestrator` with Redis workspace lock manager (`SET NX EX` + safe token release), multi-tenant scheduler loop, per-workspace DB context isolation, and scheduler audit events in `workspace_events`. Added CLI runner `python -m src.orchestrator.manager` and test coverage for lock-skip, failure recovery, and execution isolation. |
 | 9 | Telegram Seed + Daily Post | DONE | 2026-02-18 | 2026-02-18 | Added Telegram integration (`/integrations/telegram`) with webhook secret validation, seed persistence, style extraction memory, and workspace-scoped listing. Added Daily Post engine (`/daily-post`) with guard validation (Brand Consistency + Anti-Cringe) and optional auto-publish via existing publishing engine. Added Alembic migration `20260218_0006` for `telegram_seeds` and `daily_post_drafts` with PostgreSQL RLS. |
-| 10 | Hardening + Observability | DONE | 2026-02-18 | 2026-02-18 | Added Sentry bootstrap (`src/core/observability.py`), Prometheus-style `GET /metrics`, production IP rate limit middleware with limit headers and block metrics, plus basic load test script (`scripts/loadtest_basic.py`) and Makefile target. Validation: new tests for metrics/rate-limit/observability, full `pytest` and `ruff` green. |
+| 10 | Hardening + Observability | DONE | 2026-02-18 | 2026-02-18 | Added Sentry bootstrap (`src/core/observability.py`), Prometheus-style `GET /metrics`, production IP rate limit middleware with limit headers and block metrics, plus basic load test script (`scripts/loadtest_basic.py`) and Makefile target. Validation: new tests for metrics/rate-limit/observability, full `pytest` and `ruff` green. Production checks completed on `social.revfirst.cloud` (`/health`, `/version`, `/metrics` all `200`) and Sentry smoke event received in `production`. |
+| 11 | Single-Workspace Excellence | IN_PROGRESS | 2026-02-18 | - | Technical baseline delivered: runtime single-workspace mode (`config/runtime.yaml` + scheduler behavior), business counters exposed in `/metrics`, and Sentry workspace context propagation in API/scheduler. Pending completion criterion: sustained 30-day operational validation window using `docs/OPERATIONAL_VALIDATION.md`. |
+| 12 | Control Plane via Telegram | NOT_STARTED | - | - | Planned (priority): command center with whitelist+roles, audited admin commands, idempotent control operations, pause/kill switch, and CI-covered handler suite. |
+| 13 | ContentObject + Channel Abstraction | NOT_STARTED | - | - | Planned: canonical content object and channel adapter architecture with X real publisher and other channels as preview stubs. |
+| 14 | Email Module (Real) | NOT_STARTED | - | - | Planned: provider integration, formatter/publisher, and approval/limits/audit compatibility. |
+| 15 | Blog Module (Real) | NOT_STARTED | - | - | Planned: CMS publish integration and repurpose engine for long-form output. |
+| 16 | Instagram Module (Real) | NOT_STARTED | - | - | Planned: Meta Graph integration with formatter + schedule controls. |
+| 17 | Controlled Beta (2-5 workspaces) | NOT_STARTED | - | - | Planned: staged rollout by feature flags with strict isolation validation. |
+| 18 | Enterprise Hardening | NOT_STARTED | - | - | Planned: advanced backups, versioning, and enterprise governance controls after behavior maturity. |
 
 Update protocol:
 - At phase start: set `IN_PROGRESS` and fill `Started On`.
@@ -321,3 +490,7 @@ Update protocol:
 - 2026-02-18: Phase 9 validated with API integration tests (webhook auth, seed persistence, guarded generation, and auto-publish usage accounting) plus migration contract checks.
 - 2026-02-18: Phase 10 implemented with Sentry bootstrap, `/metrics` endpoint, production IP rate limiting middleware, and basic load-test script/target.
 - 2026-02-18: Phase 10 validated with dedicated tests for observability stack and successful lint/test suite.
+- 2026-02-18: Production routing standardized on `social.revfirst.cloud` to avoid collision with official `www.revfirst.cloud` surface.
+- 2026-02-18: Coolify routing labels corrected for host-based domain rule and HTTPS cert resolver; production endpoint validation succeeded.
+- 2026-02-18: Upgraded master plan to v1.8 with post-Phase-10 roadmap (Phases 11-18) and control-plane hardening requirements (queue contract, idempotency, permission matrix, kill switch, and config precedence).
+- 2026-02-18: Phase 11 started with technical execution baseline complete (single-workspace runtime mode, business counters, Sentry workspace context, and operational validation template). 30-day validation window remains open for final completion.

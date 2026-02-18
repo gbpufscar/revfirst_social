@@ -13,6 +13,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
+from src.core.metrics import record_daily_post_published, record_seed_used
 from src.domain.agents.anti_cringe_guard import evaluate_cringe
 from src.domain.agents.brand_consistency import validate_brand_consistency
 from src.integrations.telegram.service import list_recent_telegram_seeds
@@ -198,6 +199,9 @@ def generate_daily_post(
         limit=settings.daily_post_seed_limit,
     )
     style_memory = _build_style_memory(seeds)
+    if seeds:
+        record_seed_used(workspace_id=workspace_id, count=len(seeds))
+
     resolved_topic = _clean_topic(topic)
     text = _compose_daily_post(topic=resolved_topic, style_memory=style_memory)
 
@@ -290,6 +294,8 @@ def generate_daily_post(
             fresh.error_message = None if publish_result.published else publish_result.message
             fresh.updated_at = datetime.now(timezone.utc)
         session.commit()
+        if publish_result.published:
+            record_daily_post_published(workspace_id=workspace_id)
 
     event_type = "daily_post_published" if published else "daily_post_ready"
     if auto_publish and not published:
@@ -340,4 +346,3 @@ def list_daily_post_drafts(
         .limit(safe_limit)
     )
     return list(session.scalars(statement).all())
-

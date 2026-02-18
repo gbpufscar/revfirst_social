@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 
 try:  # pragma: no cover - availability depends on runtime image.
@@ -55,6 +56,35 @@ def init_sentry() -> bool:
         traces_sample_rate=settings.sentry_traces_sample_rate,
     )
     return True
+
+
+@contextmanager
+def sentry_scope(*, workspace_id: str | None = None, request_id: str | None = None):
+    """Create a temporary Sentry scope with request/workspace context."""
+
+    if not _SENTRY_AVAILABLE:
+        yield
+        return
+
+    assert sentry_sdk is not None  # for type-checkers only
+    with sentry_sdk.push_scope() as scope:
+        context_payload: dict[str, str] = {}
+        if workspace_id:
+            scope.set_tag("workspace_id", workspace_id)
+            context_payload["workspace_id"] = workspace_id
+        if request_id:
+            scope.set_tag("request_id", request_id)
+            context_payload["request_id"] = request_id
+        if context_payload:
+            scope.set_context("revfirst", context_payload)
+        yield
+
+
+def capture_exception(exc: BaseException) -> None:
+    if not _SENTRY_AVAILABLE:
+        return
+    assert sentry_sdk is not None  # for type-checkers only
+    sentry_sdk.capture_exception(exc)
 
 
 def reset_observability_for_tests() -> None:

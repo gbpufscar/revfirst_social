@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     port: int = 8000
     app_name: str = "revfirst_social"
     app_version: str = "0.1.0"
+    runtime_file_path: str = "config/runtime.yaml"
     jwt_algorithm: str = "HS256"
     access_token_exp_minutes: int = 60
     token_encryption_key: str = ""
