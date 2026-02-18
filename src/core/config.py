@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     scheduler_workspace_lock_ttl_seconds: int = 300
     scheduler_max_workspaces_per_run: int = 50
     scheduler_candidate_evaluation_limit: int = 5
+    telegram_webhook_secret: str = ""
+    telegram_seed_max_text_chars: int = 1200
+    daily_post_seed_limit: int = 10
+    daily_post_default_topic: str = "builder growth"
+    daily_post_auto_publish_default: bool = False
 
     model_config = SettingsConfigDict(
         env_file=".env",
