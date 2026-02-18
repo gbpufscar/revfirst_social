@@ -339,3 +339,70 @@ class IngestionCandidate(Base):
             "opportunity_score",
         ),
     )
+
+
+class PublishAuditLog(Base):
+    __tablename__ = "publish_audit_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    platform: Mapped[str] = mapped_column(String(20), nullable=False, default="x")
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    request_text: Mapped[str] = mapped_column(Text, nullable=False)
+    in_reply_to_tweet_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_thread_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_author_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    external_post_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    error_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_publish_audit_logs_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_publish_audit_logs_workspace_status_created_at", "workspace_id", "status", "created_at"),
+    )
+
+
+class PublishCooldown(Base):
+    __tablename__ = "publish_cooldowns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    scope_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    cooldown_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_action: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "scope", "scope_key", name="uq_publish_cooldowns_workspace_scope_key"),
+        Index("ix_publish_cooldowns_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_publish_cooldowns_lookup", "workspace_id", "scope", "scope_key"),
+    )

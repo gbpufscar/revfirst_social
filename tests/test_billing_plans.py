@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
@@ -66,7 +66,7 @@ def test_check_plan_limit_uses_daily_aggregation(monkeypatch) -> None:
             workspace_id=workspace.id,
             action="publish_reply",
             requested=1,
-            usage_date=date.today(),
+            usage_date=datetime.now(timezone.utc).date(),
         )
         assert decision.allowed is False
         assert decision.limit == 5
@@ -74,4 +74,3 @@ def test_check_plan_limit_uses_daily_aggregation(monkeypatch) -> None:
         assert decision.remaining == 0
     finally:
         session.close()
-

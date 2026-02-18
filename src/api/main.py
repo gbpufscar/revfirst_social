@@ -14,6 +14,7 @@ from src.core.config import get_settings
 from src.core.logger import bind_request_context, clear_request_context, get_logger
 from src.ingestion.router import router as ingestion_router
 from src.integrations.x.router import router as x_integration_router
+from src.publishing.router import router as publishing_router
 from src.storage.db import load_models
 from src.storage.db import test_connection as test_db_connection
 from src.storage.redis_client import test_connection as test_redis_connection
@@ -86,3 +87,4 @@ app.include_router(workspaces_router)
 app.include_router(billing_router)
 app.include_router(x_integration_router)
 app.include_router(ingestion_router)
+app.include_router(publishing_router)
