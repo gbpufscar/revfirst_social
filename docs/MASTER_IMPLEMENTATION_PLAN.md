@@ -285,7 +285,7 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 | 6 | Domain Agents | DONE | 2026-02-17 | 2026-02-17 | Added pure domain agents under `src/domain/agents` (Reply Writer, Brand Consistency, Anti-Cringe Guard, Thread Detector, Lead Tracker) with strict Pydantic JSON contracts and composition pipeline, without HTTP/Stripe/publish dependencies. Validation: dedicated unit tests for each agent + pipeline, `pytest` (37 passed) and `ruff` passed. |
 | 7 | Publishing Engine | DONE | 2026-02-17 | 2026-02-17 | Added publishing engine as single X write path via `/publishing` routes and `src/publishing/service.py`. Implemented plan check before publish, thread/author cooldown enforcement, and full audit trail (`publish_audit_logs` + `publish_cooldowns`) with PostgreSQL RLS through Alembic `20260217_0005`. Validation: unit/integration tests for publish success, cooldown block, and plan-limit block; `pytest` and `ruff` passed; migration chain validated through `0005`. |
 | 8 | Scheduler + Locks | DONE | 2026-02-18 | 2026-02-18 | Added orchestrator stack under `src/orchestrator` with Redis workspace lock manager (`SET NX EX` + safe token release), multi-tenant scheduler loop, per-workspace DB context isolation, and scheduler audit events in `workspace_events`. Added CLI runner `python -m src.orchestrator.manager` and test coverage for lock-skip, failure recovery, and execution isolation. |
-| 9 | Telegram Seed + Daily Post | NOT_STARTED | - | - | - |
+| 9 | Telegram Seed + Daily Post | DONE | 2026-02-18 | 2026-02-18 | Added Telegram integration (`/integrations/telegram`) with webhook secret validation, seed persistence, style extraction memory, and workspace-scoped listing. Added Daily Post engine (`/daily-post`) with guard validation (Brand Consistency + Anti-Cringe) and optional auto-publish via existing publishing engine. Added Alembic migration `20260218_0006` for `telegram_seeds` and `daily_post_drafts` with PostgreSQL RLS. |
 | 10 | Hardening + Observability | NOT_STARTED | - | - | - |
 
 Update protocol:
@@ -317,3 +317,5 @@ Update protocol:
 - 2026-02-17: Phase 7 validated with API-level publish tests (success, cooldown block, plan-limit block) and migration contract checks.
 - 2026-02-18: Phase 8 implemented with workspace-level Redis locks and multi-tenant scheduler orchestration (`src/orchestrator/*`).
 - 2026-02-18: Phase 8 validated with scheduler lock/isolation tests and integrated CLI run path for operations.
+- 2026-02-18: Phase 9 implemented with Telegram seed ingestion, style memory extraction, and guarded daily post generation with optional publish path.
+- 2026-02-18: Phase 9 validated with API integration tests (webhook auth, seed persistence, guarded generation, and auto-publish usage accounting) plus migration contract checks.

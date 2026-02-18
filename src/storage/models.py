@@ -406,3 +406,79 @@ class PublishCooldown(Base):
         Index("ix_publish_cooldowns_workspace_created_at", "workspace_id", "created_at"),
         Index("ix_publish_cooldowns_lookup", "workspace_id", "scope", "scope_key"),
     )
+
+
+class TelegramSeed(Base):
+    __tablename__ = "telegram_seeds"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_chat_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_message_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    style_fingerprint_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "source_chat_id",
+            "source_message_id",
+            name="uq_telegram_seeds_workspace_chat_message",
+        ),
+        Index("ix_telegram_seeds_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_telegram_seeds_workspace_user_created_at", "workspace_id", "source_user_id", "created_at"),
+    )
+
+
+class DailyPostDraft(Base):
+    __tablename__ = "daily_post_drafts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    topic: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    style_memory_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    seed_reference_ids_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    brand_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    brand_violations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    cringe_risk_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cringe_flags_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    publish_action: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    external_post_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_daily_post_drafts_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_daily_post_drafts_workspace_status_created_at", "workspace_id", "status", "created_at"),
+    )
