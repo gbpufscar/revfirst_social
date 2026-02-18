@@ -14,7 +14,7 @@ from src.auth.router import router as auth_router
 from src.core.config import get_settings
 from src.core.logger import bind_request_context, clear_request_context, get_logger
 from src.core.metrics import record_http_request, record_rate_limit_block, render_prometheus_metrics
-from src.core.observability import init_sentry
+from src.core.observability import init_sentry, sentry_scope
 from src.core.rate_limit import RateLimitDecision, get_ip_rate_limiter
 from src.daily_post.router import router as daily_post_router
 from src.ingestion.router import router as ingestion_router
@@ -72,24 +72,25 @@ async def request_context_middleware(request: Request, call_next):
     status_code = 500
 
     try:
-        if settings.ip_rate_limit_enabled and settings.env.lower() in {"prod", "production"}:
-            limiter = get_ip_rate_limiter()
-            decision = limiter.check(ip=_resolve_client_ip(request))
-            if not decision.allowed:
-                record_rate_limit_block(kind="ip")
-                response = JSONResponse(
-                    status_code=429,
-                    content={
-                        "detail": "Rate limit exceeded",
-                        "limit": decision.limit,
-                        "remaining": decision.remaining,
-                        "reset_seconds": decision.reset_seconds,
-                    },
-                )
+        with sentry_scope(workspace_id=workspace_id, request_id=request_id):
+            if settings.ip_rate_limit_enabled and settings.env.lower() in {"prod", "production"}:
+                limiter = get_ip_rate_limiter()
+                decision = limiter.check(ip=_resolve_client_ip(request))
+                if not decision.allowed:
+                    record_rate_limit_block(kind="ip")
+                    response = JSONResponse(
+                        status_code=429,
+                        content={
+                            "detail": "Rate limit exceeded",
+                            "limit": decision.limit,
+                            "remaining": decision.remaining,
+                            "reset_seconds": decision.reset_seconds,
+                        },
+                    )
+                else:
+                    response = await call_next(request)
             else:
                 response = await call_next(request)
-        else:
-            response = await call_next(request)
         status_code = int(response.status_code)
     finally:
         duration = perf_counter() - started_at

@@ -13,6 +13,11 @@ from sqlalchemy.orm import Session
 
 from src.billing.plans import check_plan_limit, record_usage
 from src.core.config import get_settings
+from src.core.metrics import (
+    record_publish_error,
+    record_replies_published,
+    record_reply_blocked,
+)
 from src.integrations.x.service import get_workspace_x_access_token
 from src.integrations.x.x_client import XClient, XClientError
 from src.storage.models import PublishAuditLog, PublishCooldown, WorkspaceEvent
@@ -155,6 +160,7 @@ def publish_reply(
 
     token = get_workspace_x_access_token(session, workspace_id=workspace_id)
     if token is None:
+        record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
             workspace_id=workspace_id,
@@ -183,6 +189,7 @@ def publish_reply(
         requested=1,
     )
     if not limit_decision.allowed:
+        record_reply_blocked(workspace_id=workspace_id, reason="plan_limit")
         _create_audit_log(
             session,
             workspace_id=workspace_id,
@@ -216,6 +223,7 @@ def publish_reply(
         scope_key=thread_id or in_reply_to_tweet_id,
     )
     if blocked_thread_until is not None:
+        record_reply_blocked(workspace_id=workspace_id, reason="thread_cooldown")
         _create_audit_log(
             session,
             workspace_id=workspace_id,
@@ -244,6 +252,7 @@ def publish_reply(
         scope_key=target_author_id,
     )
     if blocked_author_until is not None:
+        record_reply_blocked(workspace_id=workspace_id, reason="author_cooldown")
         _create_audit_log(
             session,
             workspace_id=workspace_id,
@@ -256,6 +265,7 @@ def publish_reply(
             error_message=f"Author cooldown active until {blocked_author_until.isoformat()}",
         )
         session.commit()
+        record_replies_published(workspace_id=workspace_id)
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -332,6 +342,7 @@ def publish_reply(
         )
     except XClientError as exc:
         session.rollback()
+        record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
             workspace_id=workspace_id,
@@ -364,6 +375,7 @@ def publish_post(
     action = "publish_post"
     token = get_workspace_x_access_token(session, workspace_id=workspace_id)
     if token is None:
+        record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
             workspace_id=workspace_id,
@@ -449,6 +461,7 @@ def publish_post(
         )
     except XClientError as exc:
         session.rollback()
+        record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
             workspace_id=workspace_id,
@@ -466,4 +479,3 @@ def publish_post(
             status="failed",
             message="X publish failed",
         )
-

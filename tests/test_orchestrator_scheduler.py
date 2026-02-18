@@ -7,6 +7,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import sessionmaker
 
+import src.orchestrator.scheduler as scheduler_module
+from src.core.runtime import RuntimeConfig
 from src.orchestrator.locks import WorkspaceLockManager
 from src.orchestrator.scheduler import WorkspaceScheduler
 from src.storage.db import Base, load_models
@@ -178,3 +180,59 @@ def test_scheduler_releases_lock_after_failure() -> None:
         assert "failed" in statuses
         assert "executed" in statuses
 
+
+def test_scheduler_honors_single_workspace_mode(monkeypatch) -> None:
+    session_factory = _build_sqlite_session_factory()
+    fake_redis = _FakeRedis()
+    lock_manager = WorkspaceLockManager(fake_redis, ttl_seconds=60)
+    run_order: list[str] = []
+
+    with session_factory() as seed:
+        primary = _create_workspace(seed, name=f"primary-{uuid.uuid4()}", status="active")
+        _create_workspace(seed, name=f"secondary-{uuid.uuid4()}", status="active")
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "load_runtime_config",
+        lambda: RuntimeConfig(single_workspace_mode=True, primary_workspace_id=primary.id),
+    )
+
+    def pipeline_runner(session, workspace_id: str):  # noqa: ARG001
+        run_order.append(workspace_id)
+        return {"pipeline": "ok"}
+
+    scheduler = WorkspaceScheduler(
+        session_factory=session_factory,
+        lock_manager=lock_manager,
+        pipeline_runner=pipeline_runner,
+    )
+    result = scheduler.run_once()
+
+    assert result.total_active_workspaces == 1
+    assert result.executed == 1
+    assert run_order == [primary.id]
+
+
+def test_scheduler_single_workspace_mode_without_primary_returns_empty(monkeypatch) -> None:
+    session_factory = _build_sqlite_session_factory()
+    fake_redis = _FakeRedis()
+    lock_manager = WorkspaceLockManager(fake_redis, ttl_seconds=60)
+
+    with session_factory() as seed:
+        _create_workspace(seed, name=f"active-{uuid.uuid4()}", status="active")
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "load_runtime_config",
+        lambda: RuntimeConfig.model_construct(single_workspace_mode=True, primary_workspace_id=None),
+    )
+
+    scheduler = WorkspaceScheduler(
+        session_factory=session_factory,
+        lock_manager=lock_manager,
+        pipeline_runner=lambda session, workspace_id: {},  # noqa: ARG005
+    )
+    result = scheduler.run_once()
+
+    assert result.total_active_workspaces == 0
+    assert result.executed == 0

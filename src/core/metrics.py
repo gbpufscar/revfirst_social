@@ -15,10 +15,21 @@ _http_requests_total: Dict[Tuple[str, str, str], int] = defaultdict(int)
 _http_request_duration_sum: Dict[Tuple[str, str], float] = defaultdict(float)
 _http_request_duration_count: Dict[Tuple[str, str], int] = defaultdict(int)
 _rate_limit_block_total: Dict[str, int] = defaultdict(int)
+_replies_generated_total: Dict[str, int] = defaultdict(int)
+_replies_published_total: Dict[str, int] = defaultdict(int)
+_reply_blocked_total: Dict[Tuple[str, str], int] = defaultdict(int)
+_daily_post_published_total: Dict[str, int] = defaultdict(int)
+_seed_used_total: Dict[str, int] = defaultdict(int)
+_publish_errors_total: Dict[Tuple[str, str], int] = defaultdict(int)
 
 
 def _escape_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _normalize_label(value: str, *, fallback: str = "unknown") -> str:
+    normalized = (value or "").strip()
+    return normalized or fallback
 
 
 def record_http_request(*, method: str, path: str, status_code: int, duration_seconds: float) -> None:
@@ -35,7 +46,51 @@ def record_http_request(*, method: str, path: str, status_code: int, duration_se
 
 def record_rate_limit_block(*, kind: str) -> None:
     with _lock:
-        _rate_limit_block_total[kind] += 1
+        _rate_limit_block_total[_normalize_label(kind)] += 1
+
+
+def record_replies_generated(*, workspace_id: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    with _lock:
+        _replies_generated_total[_normalize_label(workspace_id)] += int(count)
+
+
+def record_replies_published(*, workspace_id: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    with _lock:
+        _replies_published_total[_normalize_label(workspace_id)] += int(count)
+
+
+def record_reply_blocked(*, workspace_id: str, reason: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    with _lock:
+        key = (_normalize_label(workspace_id), _normalize_label(reason))
+        _reply_blocked_total[key] += int(count)
+
+
+def record_daily_post_published(*, workspace_id: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    with _lock:
+        _daily_post_published_total[_normalize_label(workspace_id)] += int(count)
+
+
+def record_seed_used(*, workspace_id: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    with _lock:
+        _seed_used_total[_normalize_label(workspace_id)] += int(count)
+
+
+def record_publish_error(*, workspace_id: str, channel: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    with _lock:
+        key = (_normalize_label(workspace_id), _normalize_label(channel))
+        _publish_errors_total[key] += int(count)
 
 
 def render_prometheus_metrics(*, app_name: str, app_version: str, env: str) -> str:
@@ -46,6 +101,12 @@ def render_prometheus_metrics(*, app_name: str, app_version: str, env: str) -> s
         duration_sum = dict(_http_request_duration_sum)
         duration_count = dict(_http_request_duration_count)
         rate_limit_total = dict(_rate_limit_block_total)
+        replies_generated_total = dict(_replies_generated_total)
+        replies_published_total = dict(_replies_published_total)
+        reply_blocked_total = dict(_reply_blocked_total)
+        daily_post_published_total = dict(_daily_post_published_total)
+        seed_used_total = dict(_seed_used_total)
+        publish_errors_total = dict(_publish_errors_total)
 
     lines = [
         "# HELP revfirst_build_info Build metadata.",
@@ -99,6 +160,76 @@ def render_prometheus_metrics(*, app_name: str, app_version: str, env: str) -> s
     for kind, value in sorted(rate_limit_total.items()):
         lines.append(f'revfirst_rate_limit_block_total{{kind="{_escape_label(kind)}"}} {value}')
 
+    lines.extend(
+        [
+            "# HELP revfirst_replies_generated_total Total generated replies.",
+            "# TYPE revfirst_replies_generated_total counter",
+        ]
+    )
+    for workspace_id, value in sorted(replies_generated_total.items()):
+        lines.append(
+            f'revfirst_replies_generated_total{{workspace_id="{_escape_label(workspace_id)}"}} {value}'
+        )
+
+    lines.extend(
+        [
+            "# HELP revfirst_replies_published_total Total published replies.",
+            "# TYPE revfirst_replies_published_total counter",
+        ]
+    )
+    for workspace_id, value in sorted(replies_published_total.items()):
+        lines.append(
+            f'revfirst_replies_published_total{{workspace_id="{_escape_label(workspace_id)}"}} {value}'
+        )
+
+    lines.extend(
+        [
+            "# HELP revfirst_reply_blocked_total Total blocked replies.",
+            "# TYPE revfirst_reply_blocked_total counter",
+        ]
+    )
+    for (workspace_id, reason), value in sorted(reply_blocked_total.items()):
+        lines.append(
+            (
+                f'revfirst_reply_blocked_total{{workspace_id="{_escape_label(workspace_id)}",'
+                f'reason="{_escape_label(reason)}"}} {value}'
+            )
+        )
+
+    lines.extend(
+        [
+            "# HELP revfirst_daily_post_published_total Total published daily posts.",
+            "# TYPE revfirst_daily_post_published_total counter",
+        ]
+    )
+    for workspace_id, value in sorted(daily_post_published_total.items()):
+        lines.append(
+            f'revfirst_daily_post_published_total{{workspace_id="{_escape_label(workspace_id)}"}} {value}'
+        )
+
+    lines.extend(
+        [
+            "# HELP revfirst_seed_used_total Total seeds used for generation.",
+            "# TYPE revfirst_seed_used_total counter",
+        ]
+    )
+    for workspace_id, value in sorted(seed_used_total.items()):
+        lines.append(f'revfirst_seed_used_total{{workspace_id="{_escape_label(workspace_id)}"}} {value}')
+
+    lines.extend(
+        [
+            "# HELP revfirst_publish_errors_total Total publish errors by channel.",
+            "# TYPE revfirst_publish_errors_total counter",
+        ]
+    )
+    for (workspace_id, channel), value in sorted(publish_errors_total.items()):
+        lines.append(
+            (
+                f'revfirst_publish_errors_total{{workspace_id="{_escape_label(workspace_id)}",'
+                f'channel="{_escape_label(channel)}"}} {value}'
+            )
+        )
+
     lines.append("")
     return "\n".join(lines)
 
@@ -110,5 +241,10 @@ def reset_metrics_for_tests() -> None:
         _http_request_duration_sum.clear()
         _http_request_duration_count.clear()
         _rate_limit_block_total.clear()
+        _replies_generated_total.clear()
+        _replies_published_total.clear()
+        _reply_blocked_total.clear()
+        _daily_post_published_total.clear()
+        _seed_used_total.clear()
+        _publish_errors_total.clear()
     _started_at = time.time()
-
