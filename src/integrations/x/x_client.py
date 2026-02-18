@@ -19,6 +19,7 @@ class XClient:
         *,
         token_url: str,
         search_url: str,
+        publish_url: str,
         client_id: str,
         client_secret: str,
         redirect_uri: str,
@@ -27,6 +28,7 @@ class XClient:
     ) -> None:
         self.token_url = token_url
         self.search_url = search_url
+        self.publish_url = publish_url
         self.client_id = client_id
         self.client_secret = client_secret
         self.redirect_uri = redirect_uri
@@ -99,16 +101,46 @@ class XClient:
             raise XClientError("Invalid X search payload format")
         return payload
 
+    def create_tweet(
+        self,
+        *,
+        access_token: str,
+        text: str,
+        in_reply_to_tweet_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        if not access_token:
+            raise XClientError("Missing access token for X publish")
+        if not text.strip():
+            raise XClientError("Tweet text is required")
+
+        payload: Dict[str, Any] = {"text": text}
+        if in_reply_to_tweet_id:
+            payload["reply"] = {"in_reply_to_tweet_id": in_reply_to_tweet_id}
+
+        with httpx.Client(timeout=self.timeout_seconds) as client:
+            response = client.post(
+                self.publish_url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json=payload,
+            )
+        if response.status_code >= 400:
+            raise XClientError(f"X publish failed with status {response.status_code}")
+
+        parsed = response.json()
+        if not isinstance(parsed, dict):
+            raise XClientError("Invalid X publish payload format")
+        return parsed
+
 
 def get_x_client() -> XClient:
     settings = get_settings()
     return XClient(
         token_url=settings.x_token_url,
         search_url=settings.x_search_url,
+        publish_url=settings.x_publish_url,
         client_id=settings.x_client_id,
         client_secret=settings.x_client_secret,
         redirect_uri=settings.x_redirect_uri,
         timeout_seconds=settings.x_api_timeout_seconds,
         default_open_calls_query=settings.x_default_open_calls_query,
     )
-

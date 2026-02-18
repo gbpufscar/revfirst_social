@@ -30,11 +30,15 @@ class Settings(BaseSettings):
     x_redirect_uri: str = ""
     x_token_url: str = "https://api.twitter.com/2/oauth2/token"
     x_search_url: str = "https://api.twitter.com/2/tweets/search/recent"
+    x_publish_url: str = "https://api.twitter.com/2/tweets"
     x_api_timeout_seconds: int = 20
     x_default_open_calls_query: str = (
         "\"drop your saas\" OR \"share your startup\" OR \"what are you building\" "
         "OR \"show your product\" lang:en -is:retweet"
     )
+    publish_thread_cooldown_minutes: int = 45
+    publish_author_cooldown_minutes: int = 30
+    publish_max_text_chars: int = 280
 
     model_config = SettingsConfigDict(
         env_file=".env",
