@@ -482,3 +482,160 @@ class DailyPostDraft(Base):
         Index("ix_daily_post_drafts_workspace_created_at", "workspace_id", "created_at"),
         Index("ix_daily_post_drafts_workspace_status_created_at", "workspace_id", "status", "created_at"),
     )
+
+
+class WorkspaceControlSetting(Base):
+    __tablename__ = "workspace_control_settings"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    channels_json: Mapped[str] = mapped_column(Text, nullable=False, default='{"blog":false,"email":false,"instagram":false,"x":true}')
+    reply_limit_override: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    post_limit_override: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    limit_override_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", name="uq_workspace_control_settings_workspace"),
+        Index("ix_workspace_control_settings_workspace_created_at", "workspace_id", "created_at"),
+    )
+
+
+class AdminAction(Base):
+    __tablename__ = "admin_actions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    actor_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    telegram_user_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    command: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    result_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_admin_actions_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_admin_actions_workspace_command_created_at", "workspace_id", "command", "created_at"),
+    )
+
+
+class ApprovalQueueItem(Base):
+    __tablename__ = "approval_queue_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    item_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source_ref_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    intent: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    opportunity_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    approved_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_post_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "idempotency_key", name="uq_approval_queue_workspace_idempotency"),
+        Index("ix_approval_queue_items_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_approval_queue_items_workspace_status_created_at", "workspace_id", "status", "created_at"),
+    )
+
+
+class PipelineRun(Base):
+    __tablename__ = "pipeline_runs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    pipeline_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="started")
+    dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    request_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    actor_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    telegram_user_id: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    error_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "pipeline_name", "idempotency_key", name="uq_pipeline_runs_workspace_pipeline_idempotency"),
+        Index("ix_pipeline_runs_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_pipeline_runs_workspace_pipeline_created_at", "workspace_id", "pipeline_name", "created_at"),
+    )

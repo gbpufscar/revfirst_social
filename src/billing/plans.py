@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.core.config import get_settings
-from src.storage.models import UsageLog, Workspace, WorkspaceDailyUsage
+from src.storage.models import UsageLog, Workspace, WorkspaceControlSetting, WorkspaceDailyUsage
 
 
 DEFAULT_ACTION_LIMIT_MAP = {
@@ -89,6 +89,34 @@ def _get_used_count(session: Session, workspace_id: str, action: str, usage_date
     return int(daily_usage.count)
 
 
+def _resolve_override_limit(
+    session: Session,
+    *,
+    workspace_id: str,
+    action: str,
+    reference_time: datetime,
+) -> Optional[int]:
+    control = session.scalar(
+        select(WorkspaceControlSetting).where(WorkspaceControlSetting.workspace_id == workspace_id)
+    )
+    if control is None:
+        return None
+
+    expires_at = control.limit_override_expires_at
+    if expires_at is None:
+        return None
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at <= reference_time:
+        return None
+
+    if action == "publish_reply":
+        return control.reply_limit_override
+    if action == "publish_post":
+        return control.post_limit_override
+    return None
+
+
 def check_plan_limit(
     session: Session,
     *,
@@ -108,12 +136,24 @@ def check_plan_limit(
     if plan_limits is None:
         raise ValueError(f"Plan is not configured: {plan_name}")
 
-    limit_key = _resolve_limit_key(action)
-    if limit_key not in plan_limits:
-        raise ValueError(f"Limit key is not configured in plan '{plan_name}': {limit_key}")
-
-    limit = int(plan_limits[limit_key])
     now_utc = datetime.now(timezone.utc)
+    override_limit = _resolve_override_limit(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        reference_time=now_utc,
+    )
+
+    limit_key = _resolve_limit_key(action)
+    if override_limit is None:
+        if limit_key not in plan_limits:
+            raise ValueError(f"Limit key is not configured in plan '{plan_name}': {limit_key}")
+        limit = int(plan_limits[limit_key])
+    else:
+        limit = int(override_limit)
+        limit_key = f"{limit_key}_override"
+        plan_name = f"{plan_name}:override"
+
     reference_date = usage_date or now_utc.date()
     used = _get_used_count(session, workspace_id, action, reference_date)
 

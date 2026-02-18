@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     daily_post_seed_limit: int = 10
     daily_post_default_topic: str = "builder growth"
     daily_post_auto_publish_default: bool = False
+    telegram_admins_file_path: str = "config/telegram_admins.yaml"
+    control_run_lock_ttl_seconds: int = 120
+    control_limit_override_ttl_seconds: int = 86400
     sentry_dsn: str = ""
     sentry_traces_sample_rate: float = 0.0
     metrics_enabled: bool = True
