@@ -21,7 +21,7 @@ from src.core.config import get_settings
 from src.daily_post.service import generate_daily_post
 from src.domain.agents.pipeline import evaluate_candidate_bundle
 from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
-from src.publishing.service import publish_post, publish_reply
+from src.publishing.service import publish_email, publish_post, publish_reply
 from src.storage.models import ApprovalQueueItem
 
 if TYPE_CHECKING:
@@ -176,13 +176,34 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                 target_author_id=(str(metadata.get("target_author_id")) if metadata.get("target_author_id") else None),
                 x_client=context.x_client,
             )
-        else:
+        elif item.item_type == "post":
             result = publish_post(
                 context.session,
                 workspace_id=workspace_id,
                 text=item.content_text,
                 x_client=context.x_client,
             )
+        elif item.item_type == "email":
+            recipients_raw = metadata.get("recipients")
+            recipients = []
+            if isinstance(recipients_raw, str):
+                recipients = [value.strip() for value in recipients_raw.split(",") if value.strip()]
+            elif isinstance(recipients_raw, list):
+                recipients = [str(value).strip() for value in recipients_raw if str(value).strip()]
+
+            result = publish_email(
+                context.session,
+                workspace_id=workspace_id,
+                subject=str(metadata.get("subject") or "RevFirst update"),
+                body=item.content_text,
+                recipients=recipients,
+                source_kind=item.source_kind,
+                source_ref_id=item.source_ref_id,
+            )
+        else:
+            mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")
+            failed += 1
+            continue
 
         if result.published:
             mark_queue_item_published(context.session, item=item, external_post_id=result.external_post_id)
@@ -216,26 +237,53 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
             "seed_count": result.seed_count,
         }
 
+    queued_types: list[str] = []
     if result.status == "ready":
-        create_queue_item(
-            context.session,
-            workspace_id=context.envelope.workspace_id,
-            item_type="post",
-            content_text=result.text,
-            source_kind="daily_post_draft",
-            source_ref_id=result.draft_id,
-            intent="daily_post",
-            opportunity_score=100,
-            idempotency_key=f"daily_post:{result.draft_id}",
-            metadata={"draft_id": result.draft_id},
-        )
+        channel_targets = list(result.channel_targets)
+        previews = dict(result.channel_previews)
+        if "x" in channel_targets:
+            create_queue_item(
+                context.session,
+                workspace_id=context.envelope.workspace_id,
+                item_type="post",
+                content_text=result.text,
+                source_kind="daily_post_draft",
+                source_ref_id=result.draft_id,
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key=f"daily_post:{result.draft_id}",
+                metadata={"draft_id": result.draft_id},
+            )
+            queued_types.append("post")
+
+        if "email" in channel_targets:
+            email_preview = previews.get("email") or {}
+            email_subject = str(email_preview.get("title") or "RevFirst update")
+            email_body = str(email_preview.get("body") or result.text)
+            create_queue_item(
+                context.session,
+                workspace_id=context.envelope.workspace_id,
+                item_type="email",
+                content_text=email_body,
+                source_kind="daily_post_draft",
+                source_ref_id=result.draft_id,
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key=f"daily_post_email:{result.draft_id}",
+                metadata={
+                    "draft_id": result.draft_id,
+                    "subject": email_subject,
+                },
+            )
+            queued_types.append("email")
 
     return {
         "status": "ok",
         "draft_id": result.draft_id,
         "draft_status": result.status,
         "seed_count": result.seed_count,
-        "queued": result.status == "ready",
+        "queued": len(queued_types),
+        "queued_types": queued_types,
     }
 
 

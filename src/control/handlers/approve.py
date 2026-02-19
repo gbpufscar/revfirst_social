@@ -13,7 +13,7 @@ from src.control.services import (
     mark_queue_item_rejected,
     parse_queue_metadata,
 )
-from src.publishing.service import publish_post, publish_reply
+from src.publishing.service import publish_email, publish_post, publish_reply
 
 if TYPE_CHECKING:
     from src.control.command_router import CommandContext
@@ -86,12 +86,36 @@ def handle(context: "CommandContext") -> ControlResponse:
             target_author_id=(str(metadata.get("target_author_id")) if metadata.get("target_author_id") else None),
             x_client=context.x_client,
         )
-    else:
+    elif item.item_type == "post":
         result = publish_post(
             context.session,
             workspace_id=workspace_id,
             text=item.content_text,
             x_client=context.x_client,
+        )
+    elif item.item_type == "email":
+        recipients_raw = metadata.get("recipients")
+        recipients = []
+        if isinstance(recipients_raw, str):
+            recipients = [value.strip() for value in recipients_raw.split(",") if value.strip()]
+        elif isinstance(recipients_raw, list):
+            recipients = [str(value).strip() for value in recipients_raw if str(value).strip()]
+
+        result = publish_email(
+            context.session,
+            workspace_id=workspace_id,
+            subject=str(metadata.get("subject") or "RevFirst update"),
+            body=item.content_text,
+            recipients=recipients,
+            source_kind=item.source_kind,
+            source_ref_id=item.source_ref_id,
+        )
+    else:
+        mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")
+        return ControlResponse(
+            success=False,
+            message="unsupported_queue_item_type",
+            data={"queue_id": queue_id, "status": "failed"},
         )
 
     if result.published:

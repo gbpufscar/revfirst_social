@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 _ACTION_TO_LIMIT_KEY = {
     "publish_reply": "max_replies_per_day",
     "publish_post": "max_posts_per_day",
+    "publish_email": "max_emails_per_day",
 }
 
 
@@ -104,6 +105,9 @@ def handle(context: "CommandContext") -> ControlResponse:
         "daily_post": {
             "latest_status": latest_daily_post.status if latest_daily_post else "none",
             "published_today": int(usage_map.get("publish_post", 0)),
+        },
+        "email": {
+            "published_today": int(usage_map.get("publish_email", 0)),
         },
         "queue": {
             "pending": int(queue_counter.get("pending", 0)),
