@@ -118,6 +118,9 @@ def test_phase9_webhook_seed_and_generate_ready_post(monkeypatch) -> None:
         assert payload["cringe_passed"] is True
         assert payload["published"] is False
         assert payload["seed_count"] == 1
+        assert payload["content_object"]["content_type"] == "short_post"
+        assert "x" in payload["channel_targets"]
+        assert "x" in payload["channel_previews"]
 
         with session_factory() as verify_session:
             seeds = verify_session.scalars(select(TelegramSeed).where(TelegramSeed.workspace_id == workspace_id)).all()
@@ -198,6 +201,9 @@ def test_phase9_generate_with_auto_publish_creates_post_usage(monkeypatch) -> No
         assert payload["published"] is True
         assert payload["status"] == "published"
         assert payload["external_post_id"] == "tweet-1"
+        assert payload["content_object"]["content_type"] == "short_post"
+        assert payload["channel_targets"] == ["x"]
+        assert "x" in payload["channel_previews"]
 
         with session_factory() as verify_session:
             usage = verify_session.scalar(
@@ -261,4 +267,3 @@ def test_phase9_webhook_rejects_invalid_secret(monkeypatch) -> None:
         api_main.app.dependency_overrides.clear()
         get_token_key.cache_clear()
         get_settings.cache_clear()
-
