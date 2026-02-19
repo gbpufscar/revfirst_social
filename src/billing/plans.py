@@ -21,6 +21,7 @@ DEFAULT_ACTION_LIMIT_MAP = {
     "publish_post": "max_posts_per_day",
     "publish_email": "max_emails_per_day",
     "publish_blog": "max_blogs_per_day",
+    "publish_instagram": "max_instagram_posts_per_day",
 }
 
 
@@ -114,7 +115,7 @@ def _resolve_override_limit(
 
     if action == "publish_reply":
         return control.reply_limit_override
-    if action in {"publish_post", "publish_email", "publish_blog"}:
+    if action in {"publish_post", "publish_email", "publish_blog", "publish_instagram"}:
         return control.post_limit_override
     return None
 

@@ -166,16 +166,21 @@ def _build_content_object(
     seed_ids: List[str],
 ) -> ContentObject:
     title = f"Founder note: {topic}".strip()
+    settings = get_settings()
+    metadata: Dict[str, Any] = {
+        "topic": topic,
+        "style_memory": style_memory,
+        "seed_ids": list(seed_ids),
+    }
+    if settings.instagram_default_image_url.strip():
+        metadata["image_url"] = settings.instagram_default_image_url.strip()
+
     return ContentObject(
         workspace_id=workspace_id,
         content_type="short_post",
         title=title[:120],
         body=text,
-        metadata={
-            "topic": topic,
-            "style_memory": style_memory,
-            "seed_ids": list(seed_ids),
-        },
+        metadata=metadata,
         channel_targets=["x", "email", "blog", "instagram"],
         source_agent="daily_post_writer",
     )

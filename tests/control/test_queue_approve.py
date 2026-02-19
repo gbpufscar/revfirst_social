@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 import src.channels.blog.publisher as blog_publisher_module
 import src.channels.email.publisher as email_publisher_module
+import src.channels.instagram.publisher as instagram_publisher_module
 from src.control.services import create_queue_item
 from src.storage.models import ApprovalQueueItem
 from tests.control.conftest import create_control_test_context, teardown_control_test_context
@@ -114,6 +116,19 @@ class _FakeBlogWebhookClient:
         del title, markdown, workspace_id, metadata
         self.counter += 1
         return {"id": f"blog-{self.counter}"}
+
+
+class _FakeInstagramGraphClient:
+    def __init__(self) -> None:
+        self.counter = 0
+
+    def publish_caption(self, *, caption: str, image_url: str):
+        del caption, image_url
+        self.counter += 1
+        return {
+            "creation_response": {"id": f"creation-{self.counter}"},
+            "publish_response": {"id": f"instagram-{self.counter}"},
+        }
 
 
 def test_queue_and_approve_publish_email(monkeypatch, tmp_path) -> None:
@@ -228,5 +243,120 @@ def test_queue_and_approve_publish_blog(monkeypatch, tmp_path) -> None:
             assert row is not None
             assert row.status == "published"
             assert row.published_post_id == "blog-1"
+    finally:
+        teardown_control_test_context()
+
+
+def test_queue_and_approve_publish_instagram(monkeypatch, tmp_path) -> None:
+    fake_instagram = _FakeInstagramGraphClient()
+    monkeypatch.setattr(instagram_publisher_module, "get_instagram_graph_client", lambda: fake_instagram)
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="instagram",
+                content_text="Founder insight with one practical takeaway and zero hype.",
+                source_kind="manual_test",
+                source_ref_id="daily-post-instagram-1",
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key="test-queue-instagram-approve-1",
+                metadata={
+                    "image_url": "https://cdn.revfirst.cloud/ig-post-1.jpg",
+                },
+            )
+            queue_id = queue_item.id
+
+        approve_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 4302,
+                "message": {
+                    "message_id": 932,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/approve {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert approve_response.status_code == 200
+        approve_payload = approve_response.json()
+        assert approve_payload["accepted"] is True
+        assert approve_payload["message"] == "approved_and_published"
+        assert approve_payload["data"]["external_post_id"] == "instagram-1"
+
+        with context.session_factory() as session:
+            row = session.scalar(
+                select(ApprovalQueueItem).where(
+                    ApprovalQueueItem.workspace_id == context.workspace_id,
+                    ApprovalQueueItem.id == queue_id,
+                )
+            )
+            assert row is not None
+            assert row.status == "published"
+            assert row.published_post_id == "instagram-1"
+    finally:
+        teardown_control_test_context()
+
+
+def test_queue_and_approve_schedules_instagram_for_future(monkeypatch, tmp_path) -> None:
+    fake_instagram = _FakeInstagramGraphClient()
+    monkeypatch.setattr(instagram_publisher_module, "get_instagram_graph_client", lambda: fake_instagram)
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        scheduled_for = datetime.now(timezone.utc) + timedelta(hours=2)
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="instagram",
+                content_text="Scheduled founder note for Instagram.",
+                source_kind="manual_test",
+                source_ref_id="daily-post-instagram-2",
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key="test-queue-instagram-approve-scheduled-1",
+                metadata={
+                    "image_url": "https://cdn.revfirst.cloud/ig-post-2.jpg",
+                    "scheduled_for": scheduled_for.isoformat(),
+                },
+            )
+            queue_id = queue_item.id
+
+        approve_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 4303,
+                "message": {
+                    "message_id": 933,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/approve {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert approve_response.status_code == 200
+        approve_payload = approve_response.json()
+        assert approve_payload["accepted"] is True
+        assert approve_payload["message"] == "approved_scheduled"
+        assert approve_payload["data"]["status"] == "approved"
+        assert fake_instagram.counter == 0
+
+        with context.session_factory() as session:
+            row = session.scalar(
+                select(ApprovalQueueItem).where(
+                    ApprovalQueueItem.workspace_id == context.workspace_id,
+                    ApprovalQueueItem.id == queue_id,
+                )
+            )
+            assert row is not None
+            assert row.status == "approved"
+            assert row.published_post_id is None
     finally:
         teardown_control_test_context()

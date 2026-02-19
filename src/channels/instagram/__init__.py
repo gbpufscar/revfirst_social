@@ -1,4 +1,4 @@
-"""Instagram channel adapter stubs."""
+"""Instagram channel adapters."""
 
 from src.channels.instagram.formatter import InstagramFormatter
 from src.channels.instagram.publisher import InstagramPublisher

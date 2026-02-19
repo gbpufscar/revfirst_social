@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.control.command_schema import ControlResponse
@@ -13,7 +14,13 @@ from src.control.services import (
     mark_queue_item_rejected,
     parse_queue_metadata,
 )
-from src.publishing.service import publish_blog, publish_email, publish_post, publish_reply
+from src.publishing.service import (
+    publish_blog,
+    publish_email,
+    publish_instagram,
+    publish_post,
+    publish_reply,
+)
 
 if TYPE_CHECKING:
     from src.control.command_router import CommandContext
@@ -26,6 +33,23 @@ def _require_queue_id(context: "CommandContext") -> str | None:
     if not context.command.args:
         return None
     return str(context.command.args[0]).strip()
+
+
+def _parse_scheduled_for(metadata: dict[str, object]) -> datetime | None:
+    raw_value = metadata.get("scheduled_for")
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def handle(context: "CommandContext") -> ControlResponse:
@@ -118,6 +142,31 @@ def handle(context: "CommandContext") -> ControlResponse:
             markdown=item.content_text,
             source_kind=item.source_kind,
             source_ref_id=item.source_ref_id,
+        )
+    elif item.item_type == "instagram":
+        scheduled_for = _parse_scheduled_for(metadata)
+        if scheduled_for is not None and scheduled_for > datetime.now(timezone.utc):
+            return ControlResponse(
+                success=True,
+                message="approved_scheduled",
+                data={
+                    "queue_id": queue_id,
+                    "status": "approved",
+                    "scheduled_for": scheduled_for.isoformat(),
+                },
+            )
+
+        image_url = str(
+            metadata.get("image_url") or metadata.get("media_url") or metadata.get("asset_url") or ""
+        ).strip()
+        result = publish_instagram(
+            context.session,
+            workspace_id=workspace_id,
+            caption=item.content_text,
+            image_url=(image_url or None),
+            source_kind=item.source_kind,
+            source_ref_id=item.source_ref_id,
+            scheduled_for=(scheduled_for.isoformat() if scheduled_for is not None else None),
         )
     else:
         mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")

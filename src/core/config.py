@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     blog_webhook_url: str = ""
     blog_webhook_token: str = ""
     blog_webhook_timeout_seconds: int = 20
+    instagram_graph_access_token: str = ""
+    instagram_graph_account_id: str = ""
+    instagram_graph_api_base_url: str = "https://graph.facebook.com/v20.0"
+    instagram_graph_api_timeout_seconds: int = 20
+    instagram_default_image_url: str = ""
+    instagram_default_schedule_hours_ahead: int = 0
     x_default_open_calls_query: str = (
         "\"drop your saas\" OR \"share your startup\" OR \"what are you building\" "
         "OR \"show your product\" lang:en -is:retweet"
@@ -82,6 +88,8 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("IP_RATE_LIMIT_REQUESTS_PER_WINDOW must be positive.")
     if settings.ip_rate_limit_window_seconds <= 0:
         raise ValueError("IP_RATE_LIMIT_WINDOW_SECONDS must be positive.")
+    if settings.instagram_default_schedule_hours_ahead < 0:
+        raise ValueError("INSTAGRAM_DEFAULT_SCHEDULE_HOURS_AHEAD must be zero or positive.")
     return settings
 
 

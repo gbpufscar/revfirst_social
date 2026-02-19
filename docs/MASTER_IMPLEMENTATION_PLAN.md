@@ -2,7 +2,7 @@
 
 Version: 2.0  
 Status: Active (Living Document)  
-Last Updated: 2026-02-18  
+Last Updated: 2026-02-19  
 Canonical Authority: `/docs/PROJECT_CANONICAL.md`
 
 ---
@@ -453,7 +453,7 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 | 13 | ContentObject + Channel Abstraction | DONE | 2026-02-19 | 2026-02-19 | Added canonical `ContentObject` usage in Reply Writer and Daily Post flows. Introduced channel adapter layer (`src/channels/*`) and workspace-safe channel routing (`src/domain/routing/channel_router.py`) with feature flags, pause controls, and optional plan-limit awareness before auto-publish. Validation: `ruff` and `pytest` passed (64 tests), including new phase-13 tests for reply-to-content conversion, routing controls, and daily-post channel preview outputs. |
 | 14 | Email Module (Real) | DONE | 2026-02-19 | 2026-02-19 | Added real email provider integration (`src/integrations/email/resend_client.py`) and upgraded email publisher from stub to live provider-backed send path with recipients/from-address controls. Added `publish_email` service with plan limits, usage aggregation (`publish_email`), audit log (`publish_audit_logs` platform `email`), and workspace event emission. Integrated approval flow (`/approve`) and manual pipeline execution (`/run daily_post`, `/run execute_approved`) for `email` queue items. Validation: `ruff` and `pytest` passed (77 tests), including new tests for email publish service, billing limits, control-plane email approval, and daily-post email queueing. |
 | 15 | Blog Module (Real) | DONE | 2026-02-19 | 2026-02-19 | Added real blog publishing via webhook provider integration (`src/integrations/blog/webhook_client.py`) and upgraded `BlogPublisher` from stub to live publish path. Added `publish_blog` service with plan-limit enforcement, usage aggregation (`publish_blog`), audit logging (`publish_audit_logs` platform `blog`), and workspace event emission. Integrated control-plane approval and execution flows for `blog` queue items and extended daily-post queue expansion when blog channel is enabled. Validation: `ruff` and `pytest` passed (83 tests), including new tests for blog publish service, billing limits, and control-plane blog queue/publish behavior. |
-| 16 | Instagram Module (Real) | NOT_STARTED | - | - | Planned: Meta Graph integration with formatter + schedule controls. |
+| 16 | Instagram Module (Real) | DONE | 2026-02-19 | 2026-02-19 | Added Meta Graph integration (`src/integrations/instagram/graph_client.py`) and upgraded Instagram publisher from stub to live publish flow. Added `publish_instagram` service with plan-limit enforcement, usage aggregation (`publish_instagram`), audit logging (`publish_audit_logs` platform `instagram`), and workspace event emission. Integrated control-plane approval/execution for `instagram` queue items plus scheduling hooks (`scheduled_for`) and daily-post queue expansion when Instagram channel is enabled. Validation: `ruff` and `pytest` passed, including new tests for Instagram publish path and scheduler-aware execution behavior. |
 | 17 | Controlled Beta (2-5 workspaces) | NOT_STARTED | - | - | Planned: staged rollout by feature flags with strict isolation validation. |
 | 18 | Enterprise Hardening | NOT_STARTED | - | - | Planned: advanced backups, versioning, and enterprise governance controls after behavior maturity. |
 
@@ -505,3 +505,6 @@ Update protocol:
 - 2026-02-19: Phase 15 implemented with webhook-based blog integration (`BlogWebhookClient`) and live `BlogPublisher`, replacing preview-only blog stub behavior.
 - 2026-02-19: Added `publish_blog` service and control-plane support for `blog` queue lifecycle (`/approve` and `/run execute_approved`) plus daily-post queue expansion when blog channel is enabled.
 - 2026-02-19: Phase 15 validated by automated checks (`.venv/bin/ruff check src tests`, `.venv/bin/pytest -q`) with 83 tests passing.
+- 2026-02-19: Phase 16 implemented with Meta Graph-based Instagram integration (`InstagramGraphClient`) and live `InstagramPublisher`, replacing preview-only Instagram stub behavior.
+- 2026-02-19: Added `publish_instagram` service with plan-limit enforcement, usage/audit/event recording, and control-plane support for `instagram` queue lifecycle (`/approve` and `/run execute_approved`).
+- 2026-02-19: Added scheduling hooks for Instagram queue items via `scheduled_for` metadata and daily-post queue expansion when Instagram channel is enabled.
