@@ -26,7 +26,7 @@ _DEFAULT_CHANNELS = {
 
 
 _ALLOWED_CHANNELS = set(_DEFAULT_CHANNELS.keys())
-_ALLOWED_QUEUE_TYPES = {"reply", "post"}
+_ALLOWED_QUEUE_TYPES = {"reply", "post", "email"}
 
 
 def _json_dumps(payload: Dict[str, Any]) -> str:

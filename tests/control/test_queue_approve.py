@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+import src.channels.email.publisher as email_publisher_module
 from src.control.services import create_queue_item
 from src.storage.models import ApprovalQueueItem
 from tests.control.conftest import create_control_test_context, teardown_control_test_context
@@ -90,5 +91,74 @@ def test_queue_and_approve_publish_reply(monkeypatch, tmp_path) -> None:
             assert row is not None
             assert row.status == "published"
             assert row.published_post_id == "tweet-1"
+    finally:
+        teardown_control_test_context()
+
+
+class _FakeResendClient:
+    def __init__(self) -> None:
+        self.counter = 0
+
+    def send_email(self, *, from_address: str, to: list[str], subject: str, text: str, tags=None):
+        del from_address, to, subject, text, tags
+        self.counter += 1
+        return {"id": f"email-{self.counter}"}
+
+
+def test_queue_and_approve_publish_email(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("EMAIL_FROM_ADDRESS", "noreply@revfirst.cloud")
+    monkeypatch.setenv("EMAIL_DEFAULT_RECIPIENTS", "ops@revfirst.io")
+    fake_resend = _FakeResendClient()
+    monkeypatch.setattr(email_publisher_module, "get_resend_client", lambda: fake_resend)
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="email",
+                content_text="Daily founder digest content",
+                source_kind="manual_test",
+                source_ref_id="daily-post-1",
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key="test-queue-email-approve-1",
+                metadata={
+                    "subject": "Daily founder digest",
+                    "recipients": ["ops@revfirst.io"],
+                },
+            )
+            queue_id = queue_item.id
+
+        approve_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 4102,
+                "message": {
+                    "message_id": 912,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/approve {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert approve_response.status_code == 200
+        approve_payload = approve_response.json()
+        assert approve_payload["accepted"] is True
+        assert approve_payload["message"] == "approved_and_published"
+        assert approve_payload["data"]["external_post_id"] == "email-1"
+
+        with context.session_factory() as session:
+            row = session.scalar(
+                select(ApprovalQueueItem).where(
+                    ApprovalQueueItem.workspace_id == context.workspace_id,
+                    ApprovalQueueItem.id == queue_id,
+                )
+            )
+            assert row is not None
+            assert row.status == "published"
+            assert row.published_post_id == "email-1"
     finally:
         teardown_control_test_context()

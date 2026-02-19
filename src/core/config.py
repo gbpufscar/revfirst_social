@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     x_search_url: str = "https://api.twitter.com/2/tweets/search/recent"
     x_publish_url: str = "https://api.twitter.com/2/tweets"
     x_api_timeout_seconds: int = 20
+    email_api_key: str = ""
+    email_api_base_url: str = "https://api.resend.com"
+    email_api_timeout_seconds: int = 20
+    email_from_address: str = ""
+    email_default_recipients: str = ""
     x_default_open_calls_query: str = (
         "\"drop your saas\" OR \"share your startup\" OR \"what are you building\" "
         "OR \"show your product\" lang:en -is:retweet"

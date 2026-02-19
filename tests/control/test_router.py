@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from src.storage.models import PipelineRun
+from src.storage.models import ApprovalQueueItem, PipelineRun
 from tests.control.conftest import create_control_test_context, teardown_control_test_context
 
 
@@ -81,5 +81,72 @@ def test_control_router_returns_unknown_command(monkeypatch, tmp_path) -> None:
         payload = response.json()
         assert payload["accepted"] is False
         assert payload["message"] == "unknown_command"
+    finally:
+        teardown_control_test_context()
+
+
+def test_run_daily_post_queues_email_when_channel_enabled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("EMAIL_FROM_ADDRESS", "noreply@revfirst.cloud")
+    monkeypatch.setenv("EMAIL_DEFAULT_RECIPIENTS", "ops@revfirst.io")
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        manual_seed = context.client.post(
+            "/integrations/telegram/seed/manual",
+            json={
+                "workspace_id": context.workspace_id,
+                "text": "Founders improve traction with direct weekly experiments and clear offers.",
+                "source_chat_id": "manual-chat",
+                "source_message_id": "manual-seed-1",
+            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+        assert manual_seed.status_code == 200
+
+        enable_email = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2201,
+                "message": {
+                    "message_id": 721,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/channel enable email",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert enable_email.status_code == 200
+        assert enable_email.json()["accepted"] is True
+
+        run_daily_post = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2202,
+                "message": {
+                    "message_id": 722,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/run daily_post",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert run_daily_post.status_code == 200
+        payload = run_daily_post.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "pipeline_executed"
+        assert "email" in payload["data"]["result"]["queued_types"]
+
+        with context.session_factory() as session:
+            queued_items = list(
+                session.scalars(
+                    select(ApprovalQueueItem).where(
+                        ApprovalQueueItem.workspace_id == context.workspace_id,
+                    )
+                ).all()
+            )
+            item_types = {item.item_type for item in queued_items}
+            assert "post" in item_types
+            assert "email" in item_types
     finally:
         teardown_control_test_context()

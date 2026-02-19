@@ -1,4 +1,4 @@
-"""Single publishing engine (only X write path)."""
+"""Publishing engine for channel writers with shared guardrails."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import json
 from typing import Any, Dict, Optional
 import uuid
 
+from src.channels.base import ChannelPayload
+from src.channels.email.publisher import EmailPublisher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -46,6 +48,7 @@ def _normalize_dt(value: datetime) -> datetime:
 def _create_audit_log(
     session: Session,
     *,
+    platform: str,
     workspace_id: str,
     action: str,
     text: str,
@@ -60,7 +63,7 @@ def _create_audit_log(
     log = PublishAuditLog(
         id=str(uuid.uuid4()),
         workspace_id=workspace_id,
-        platform="x",
+        platform=platform,
         action=action,
         request_text=text,
         in_reply_to_tweet_id=in_reply_to_tweet_id,
@@ -163,6 +166,7 @@ def publish_reply(
         record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -192,6 +196,7 @@ def publish_reply(
         record_reply_blocked(workspace_id=workspace_id, reason="plan_limit")
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -226,6 +231,7 @@ def publish_reply(
         record_reply_blocked(workspace_id=workspace_id, reason="thread_cooldown")
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -255,6 +261,7 @@ def publish_reply(
         record_reply_blocked(workspace_id=workspace_id, reason="author_cooldown")
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -285,6 +292,7 @@ def publish_reply(
 
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -345,6 +353,7 @@ def publish_reply(
         record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -378,6 +387,7 @@ def publish_post(
         record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -403,6 +413,7 @@ def publish_post(
     if not limit_decision.allowed:
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -429,6 +440,7 @@ def publish_post(
         external_post_id = _extract_external_post_id(publish_payload)
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -464,6 +476,7 @@ def publish_post(
         record_publish_error(workspace_id=workspace_id, channel="x")
         _create_audit_log(
             session,
+            platform="x",
             workspace_id=workspace_id,
             action=action,
             text=text,
@@ -479,3 +492,134 @@ def publish_post(
             status="failed",
             message="X publish failed",
         )
+
+
+def publish_email(
+    session: Session,
+    *,
+    workspace_id: str,
+    subject: str,
+    body: str,
+    recipients: Optional[list[str]] = None,
+    email_publisher: Optional[EmailPublisher] = None,
+    source_kind: Optional[str] = None,
+    source_ref_id: Optional[str] = None,
+) -> PublishResult:
+    action = "publish_email"
+    publisher = email_publisher or EmailPublisher()
+
+    limit_decision = check_plan_limit(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        requested=1,
+    )
+    if not limit_decision.allowed:
+        _create_audit_log(
+            session,
+            platform="email",
+            workspace_id=workspace_id,
+            action=action,
+            text=body,
+            status="blocked_plan",
+            error_message="Plan limit exceeded",
+            payload={
+                "subject": subject,
+                "recipients": recipients or [],
+                "limit": limit_decision.limit,
+                "used": limit_decision.used,
+                "requested": 1,
+            },
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=False,
+            external_post_id=None,
+            status="blocked_plan",
+            message="Plan limit exceeded",
+        )
+
+    payload = ChannelPayload(
+        workspace_id=workspace_id,
+        channel="email",
+        title=subject,
+        body=body,
+        metadata={
+            "recipients": recipients or [],
+            "source_kind": source_kind,
+            "source_ref_id": source_ref_id,
+        },
+    )
+
+    result = publisher.publish(payload)
+    if result.published:
+        _create_audit_log(
+            session,
+            platform="email",
+            workspace_id=workspace_id,
+            action=action,
+            text=body,
+            status="published",
+            external_post_id=result.external_id,
+            payload={
+                "subject": subject,
+                "recipients": recipients or [],
+                "provider_payload": result.payload,
+            },
+        )
+        record_usage(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            amount=1,
+            payload={"external_post_id": result.external_id, "recipients": recipients or []},
+        )
+        session.add(
+            WorkspaceEvent(
+                workspace_id=workspace_id,
+                event_type="publish_email",
+                payload_json=_json_dumps(
+                    {
+                        "external_post_id": result.external_id,
+                        "source_kind": source_kind,
+                        "source_ref_id": source_ref_id,
+                    }
+                ),
+            )
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=True,
+            external_post_id=result.external_id,
+            status="published",
+            message="Email published",
+        )
+
+    record_publish_error(workspace_id=workspace_id, channel="email")
+    _create_audit_log(
+        session,
+        platform="email",
+        workspace_id=workspace_id,
+        action=action,
+        text=body,
+        status="failed",
+        error_message=result.message,
+        payload={
+            "subject": subject,
+            "recipients": recipients or [],
+            "provider_payload": result.payload,
+        },
+    )
+    session.commit()
+    return PublishResult(
+        workspace_id=workspace_id,
+        action=action,
+        published=False,
+        external_post_id=None,
+        status="failed",
+        message=result.message,
+    )
