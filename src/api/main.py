@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from src.billing.webhooks import router as billing_router
 from src.auth.middleware import AUTH_CONTEXT_KEY, resolve_request_auth_context
 from src.auth.router import router as auth_router
+from src.control.telegram_bot import router as control_telegram_router
 from src.core.config import get_settings
 from src.core.logger import bind_request_context, clear_request_context, get_logger
 from src.core.metrics import record_http_request, record_rate_limit_block, render_prometheus_metrics
@@ -173,6 +174,7 @@ app.include_router(workspaces_router)
 app.include_router(billing_router)
 app.include_router(x_integration_router)
 app.include_router(telegram_integration_router)
+app.include_router(control_telegram_router)
 app.include_router(ingestion_router)
 app.include_router(publishing_router)
 app.include_router(daily_post_router)

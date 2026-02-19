@@ -19,6 +19,8 @@ from src.storage.tenant import reset_workspace_context, set_workspace_context
 
 ACTIVE_WORKSPACE_STATUSES = ("active", "trialing")
 PipelineRunner = Callable[[Session, str], Mapping[str, Any]]
+WorkspacePauseChecker = Callable[[str], bool]
+GlobalKillSwitchChecker = Callable[[], bool]
 
 logger = get_logger("revfirst.orchestrator.scheduler")
 
@@ -52,10 +54,14 @@ class WorkspaceScheduler:
         session_factory: sessionmaker,
         lock_manager: WorkspaceLockManager,
         pipeline_runner: PipelineRunner,
+        workspace_pause_checker: WorkspacePauseChecker | None = None,
+        global_kill_switch_checker: GlobalKillSwitchChecker | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lock_manager = lock_manager
         self._pipeline_runner = pipeline_runner
+        self._workspace_pause_checker = workspace_pause_checker or (lambda workspace_id: False)
+        self._global_kill_switch_checker = global_kill_switch_checker or (lambda: False)
 
     def list_active_workspace_ids(self, *, limit: int | None = None) -> List[str]:
         runtime = load_runtime_config()
@@ -84,7 +90,28 @@ class WorkspaceScheduler:
         failed = 0
         runs: List[WorkspaceRunSummary] = []
 
+        if self._global_kill_switch_checker():
+            for workspace_id in selected_ids:
+                details = {"reason": "global_kill_switch_enabled"}
+                runs.append(WorkspaceRunSummary(workspace_id=workspace_id, status="skipped_paused", details=details))
+                self._record_scheduler_event(workspace_id=workspace_id, status="skipped_paused", details=details)
+                logger.warning("workspace_scheduler_skipped_global_kill_switch", workspace_id=workspace_id)
+            return SchedulerRunResult(
+                total_active_workspaces=len(selected_ids),
+                executed=0,
+                skipped_locked=0,
+                failed=0,
+                runs=runs,
+            )
+
         for workspace_id in selected_ids:
+            if self._workspace_pause_checker(workspace_id):
+                details = {"reason": "workspace_paused"}
+                runs.append(WorkspaceRunSummary(workspace_id=workspace_id, status="skipped_paused", details=details))
+                self._record_scheduler_event(workspace_id=workspace_id, status="skipped_paused", details=details)
+                logger.info("workspace_scheduler_skipped_paused", workspace_id=workspace_id)
+                continue
+
             lock = self._lock_manager.acquire(workspace_id)
             if lock is None:
                 skipped_locked += 1

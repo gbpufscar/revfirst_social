@@ -1,6 +1,6 @@
 # RevFirst_Social - Master Implementation Plan
 
-Version: 1.9  
+Version: 2.0  
 Status: Active (Living Document)  
 Last Updated: 2026-02-18  
 Canonical Authority: `/docs/PROJECT_CANONICAL.md`
@@ -449,7 +449,7 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 | 9 | Telegram Seed + Daily Post | DONE | 2026-02-18 | 2026-02-18 | Added Telegram integration (`/integrations/telegram`) with webhook secret validation, seed persistence, style extraction memory, and workspace-scoped listing. Added Daily Post engine (`/daily-post`) with guard validation (Brand Consistency + Anti-Cringe) and optional auto-publish via existing publishing engine. Added Alembic migration `20260218_0006` for `telegram_seeds` and `daily_post_drafts` with PostgreSQL RLS. |
 | 10 | Hardening + Observability | DONE | 2026-02-18 | 2026-02-18 | Added Sentry bootstrap (`src/core/observability.py`), Prometheus-style `GET /metrics`, production IP rate limit middleware with limit headers and block metrics, plus basic load test script (`scripts/loadtest_basic.py`) and Makefile target. Validation: new tests for metrics/rate-limit/observability, full `pytest` and `ruff` green. Production checks completed on `social.revfirst.cloud` (`/health`, `/version`, `/metrics` all `200`) and Sentry smoke event received in `production`. |
 | 11 | Single-Workspace Excellence | IN_PROGRESS | 2026-02-18 | - | Technical baseline delivered: runtime single-workspace mode (`config/runtime.yaml` + scheduler behavior), business counters exposed in `/metrics`, and Sentry workspace context propagation in API/scheduler. Pending completion criterion: sustained 30-day operational validation window using `docs/OPERATIONAL_VALIDATION.md`. |
-| 12 | Control Plane via Telegram | NOT_STARTED | - | - | Planned (priority): command center with whitelist+roles, audited admin commands, idempotent control operations, pause/kill switch, and CI-covered handler suite. |
+| 12 | Control Plane via Telegram | DONE | 2026-02-18 | 2026-02-18 | Implemented control module (`src/control/*`) with Telegram command router, whitelist+workspace-role enforcement, audited `admin_actions`, command suite (`/help`, `/status`, `/metrics`, `/daily_report`, `/queue`, `/approve`, `/reject`, `/pause`, `/resume`, `/run`, `/channel`, `/limit`, `/seed`), idempotent `/approve` and `/run`, `dry_run` pipeline execution, global kill switch, and Redis-backed pause/run locks. Added migration `20260218_0007` (`admin_actions`, `approval_queue_items`, `workspace_control_settings`, `pipeline_runs`) + RLS and test coverage for security/router/pause/queue-approve. |
 | 13 | ContentObject + Channel Abstraction | DONE | 2026-02-19 | 2026-02-19 | Added canonical `ContentObject` usage in Reply Writer and Daily Post flows. Introduced channel adapter layer (`src/channels/*`) and workspace-safe channel routing (`src/domain/routing/channel_router.py`) with feature flags, pause controls, and optional plan-limit awareness before auto-publish. Validation: `ruff` and `pytest` passed (64 tests), including new phase-13 tests for reply-to-content conversion, routing controls, and daily-post channel preview outputs. |
 | 14 | Email Module (Real) | NOT_STARTED | - | - | Planned: provider integration, formatter/publisher, and approval/limits/audit compatibility. |
 | 15 | Blog Module (Real) | NOT_STARTED | - | - | Planned: CMS publish integration and repurpose engine for long-form output. |
@@ -494,6 +494,8 @@ Update protocol:
 - 2026-02-18: Coolify routing labels corrected for host-based domain rule and HTTPS cert resolver; production endpoint validation succeeded.
 - 2026-02-18: Upgraded master plan to v1.8 with post-Phase-10 roadmap (Phases 11-18) and control-plane hardening requirements (queue contract, idempotency, permission matrix, kill switch, and config precedence).
 - 2026-02-18: Phase 11 started with technical execution baseline complete (single-workspace runtime mode, business counters, Sentry workspace context, and operational validation template). 30-day validation window remains open for final completion.
+- 2026-02-18: Phase 12 implemented with control-plane module, command router/handlers, Telegram authorization model (whitelist + workspace role), admin command audit trail, and manual pipeline execution with lock + idempotency safeguards.
+- 2026-02-18: Phase 12 validated with new control test suite (`tests/control/*`), migration contract test (`tests/test_phase12_migration_contract.py`), full `ruff` pass, and full `pytest` pass.
 - 2026-02-19: Phase 13 implemented with canonical `ContentObject` integration in reply and daily-post generation flows and channel adapters for X/email/blog/instagram.
 - 2026-02-19: Added workspace-safe channel router with Redis-driven channel flags, pause/kill-switch checks, and optional plan-limit gating for X auto-publish.
 - 2026-02-19: Phase 13 validated by automated checks (`.venv/bin/ruff check src tests`, `.venv/bin/pytest -q`) with 64 tests passing.
