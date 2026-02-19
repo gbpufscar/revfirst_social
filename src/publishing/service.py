@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import uuid
 
 from src.channels.base import ChannelPayload
+from src.channels.blog.publisher import BlogPublisher
 from src.channels.email.publisher import EmailPublisher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -611,6 +612,132 @@ def publish_email(
         payload={
             "subject": subject,
             "recipients": recipients or [],
+            "provider_payload": result.payload,
+        },
+    )
+    session.commit()
+    return PublishResult(
+        workspace_id=workspace_id,
+        action=action,
+        published=False,
+        external_post_id=None,
+        status="failed",
+        message=result.message,
+    )
+
+
+def publish_blog(
+    session: Session,
+    *,
+    workspace_id: str,
+    title: str,
+    markdown: str,
+    blog_publisher: Optional[BlogPublisher] = None,
+    source_kind: Optional[str] = None,
+    source_ref_id: Optional[str] = None,
+) -> PublishResult:
+    action = "publish_blog"
+    publisher = blog_publisher or BlogPublisher()
+
+    limit_decision = check_plan_limit(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        requested=1,
+    )
+    if not limit_decision.allowed:
+        _create_audit_log(
+            session,
+            platform="blog",
+            workspace_id=workspace_id,
+            action=action,
+            text=markdown,
+            status="blocked_plan",
+            error_message="Plan limit exceeded",
+            payload={
+                "title": title,
+                "limit": limit_decision.limit,
+                "used": limit_decision.used,
+                "requested": 1,
+            },
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=False,
+            external_post_id=None,
+            status="blocked_plan",
+            message="Plan limit exceeded",
+        )
+
+    payload = ChannelPayload(
+        workspace_id=workspace_id,
+        channel="blog",
+        title=title,
+        body=markdown,
+        metadata={
+            "source_kind": source_kind,
+            "source_ref_id": source_ref_id,
+        },
+    )
+
+    result = publisher.publish(payload)
+    if result.published:
+        _create_audit_log(
+            session,
+            platform="blog",
+            workspace_id=workspace_id,
+            action=action,
+            text=markdown,
+            status="published",
+            external_post_id=result.external_id,
+            payload={
+                "title": title,
+                "provider_payload": result.payload,
+            },
+        )
+        record_usage(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            amount=1,
+            payload={"external_post_id": result.external_id},
+        )
+        session.add(
+            WorkspaceEvent(
+                workspace_id=workspace_id,
+                event_type="publish_blog",
+                payload_json=_json_dumps(
+                    {
+                        "external_post_id": result.external_id,
+                        "source_kind": source_kind,
+                        "source_ref_id": source_ref_id,
+                    }
+                ),
+            )
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=True,
+            external_post_id=result.external_id,
+            status="published",
+            message="Blog published",
+        )
+
+    record_publish_error(workspace_id=workspace_id, channel="blog")
+    _create_audit_log(
+        session,
+        platform="blog",
+        workspace_id=workspace_id,
+        action=action,
+        text=markdown,
+        status="failed",
+        error_message=result.message,
+        payload={
+            "title": title,
             "provider_payload": result.payload,
         },
     )

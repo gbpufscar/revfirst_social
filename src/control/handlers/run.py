@@ -21,7 +21,7 @@ from src.core.config import get_settings
 from src.daily_post.service import generate_daily_post
 from src.domain.agents.pipeline import evaluate_candidate_bundle
 from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
-from src.publishing.service import publish_email, publish_post, publish_reply
+from src.publishing.service import publish_blog, publish_email, publish_post, publish_reply
 from src.storage.models import ApprovalQueueItem
 
 if TYPE_CHECKING:
@@ -200,6 +200,15 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                 source_kind=item.source_kind,
                 source_ref_id=item.source_ref_id,
             )
+        elif item.item_type == "blog":
+            result = publish_blog(
+                context.session,
+                workspace_id=workspace_id,
+                title=str(metadata.get("title") or "RevFirst blog draft"),
+                markdown=item.content_text,
+                source_kind=item.source_kind,
+                source_ref_id=item.source_ref_id,
+            )
         else:
             mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")
             failed += 1
@@ -276,6 +285,27 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
                 },
             )
             queued_types.append("email")
+
+        if "blog" in channel_targets:
+            blog_preview = previews.get("blog") or {}
+            blog_title = str(blog_preview.get("title") or "RevFirst blog draft")
+            blog_body = str(blog_preview.get("body") or result.text)
+            create_queue_item(
+                context.session,
+                workspace_id=context.envelope.workspace_id,
+                item_type="blog",
+                content_text=blog_body,
+                source_kind="daily_post_draft",
+                source_ref_id=result.draft_id,
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key=f"daily_post_blog:{result.draft_id}",
+                metadata={
+                    "draft_id": result.draft_id,
+                    "title": blog_title,
+                },
+            )
+            queued_types.append("blog")
 
     return {
         "status": "ok",

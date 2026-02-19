@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+import src.channels.blog.publisher as blog_publisher_module
 import src.channels.email.publisher as email_publisher_module
 from src.control.services import create_queue_item
 from src.storage.models import ApprovalQueueItem
@@ -105,6 +106,16 @@ class _FakeResendClient:
         return {"id": f"email-{self.counter}"}
 
 
+class _FakeBlogWebhookClient:
+    def __init__(self) -> None:
+        self.counter = 0
+
+    def publish(self, *, title: str, markdown: str, workspace_id: str, metadata=None):
+        del title, markdown, workspace_id, metadata
+        self.counter += 1
+        return {"id": f"blog-{self.counter}"}
+
+
 def test_queue_and_approve_publish_email(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("EMAIL_FROM_ADDRESS", "noreply@revfirst.cloud")
     monkeypatch.setenv("EMAIL_DEFAULT_RECIPIENTS", "ops@revfirst.io")
@@ -160,5 +171,62 @@ def test_queue_and_approve_publish_email(monkeypatch, tmp_path) -> None:
             assert row is not None
             assert row.status == "published"
             assert row.published_post_id == "email-1"
+    finally:
+        teardown_control_test_context()
+
+
+def test_queue_and_approve_publish_blog(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("BLOG_WEBHOOK_URL", "https://blog-webhook.local/publish")
+    fake_blog = _FakeBlogWebhookClient()
+    monkeypatch.setattr(blog_publisher_module, "get_blog_webhook_client", lambda: fake_blog)
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="blog",
+                content_text="## Weekly field notes\n\nDirect positioning keeps conversations qualified.",
+                source_kind="manual_test",
+                source_ref_id="daily-post-blog-1",
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key="test-queue-blog-approve-1",
+                metadata={
+                    "title": "Weekly field notes",
+                },
+            )
+            queue_id = queue_item.id
+
+        approve_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 4202,
+                "message": {
+                    "message_id": 922,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/approve {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert approve_response.status_code == 200
+        approve_payload = approve_response.json()
+        assert approve_payload["accepted"] is True
+        assert approve_payload["message"] == "approved_and_published"
+        assert approve_payload["data"]["external_post_id"] == "blog-1"
+
+        with context.session_factory() as session:
+            row = session.scalar(
+                select(ApprovalQueueItem).where(
+                    ApprovalQueueItem.workspace_id == context.workspace_id,
+                    ApprovalQueueItem.id == queue_id,
+                )
+            )
+            assert row is not None
+            assert row.status == "published"
+            assert row.published_post_id == "blog-1"
     finally:
         teardown_control_test_context()
