@@ -11,6 +11,7 @@ import uuid
 from src.channels.base import ChannelPayload
 from src.channels.blog.publisher import BlogPublisher
 from src.channels.email.publisher import EmailPublisher
+from src.channels.instagram.publisher import InstagramPublisher
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -738,6 +739,143 @@ def publish_blog(
         error_message=result.message,
         payload={
             "title": title,
+            "provider_payload": result.payload,
+        },
+    )
+    session.commit()
+    return PublishResult(
+        workspace_id=workspace_id,
+        action=action,
+        published=False,
+        external_post_id=None,
+        status="failed",
+        message=result.message,
+    )
+
+
+def publish_instagram(
+    session: Session,
+    *,
+    workspace_id: str,
+    caption: str,
+    image_url: Optional[str] = None,
+    instagram_publisher: Optional[InstagramPublisher] = None,
+    source_kind: Optional[str] = None,
+    source_ref_id: Optional[str] = None,
+    scheduled_for: Optional[str] = None,
+) -> PublishResult:
+    action = "publish_instagram"
+    publisher = instagram_publisher or InstagramPublisher()
+
+    limit_decision = check_plan_limit(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        requested=1,
+    )
+    if not limit_decision.allowed:
+        _create_audit_log(
+            session,
+            platform="instagram",
+            workspace_id=workspace_id,
+            action=action,
+            text=caption,
+            status="blocked_plan",
+            error_message="Plan limit exceeded",
+            payload={
+                "image_url": image_url,
+                "scheduled_for": scheduled_for,
+                "limit": limit_decision.limit,
+                "used": limit_decision.used,
+                "requested": 1,
+            },
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=False,
+            external_post_id=None,
+            status="blocked_plan",
+            message="Plan limit exceeded",
+        )
+
+    payload = ChannelPayload(
+        workspace_id=workspace_id,
+        channel="instagram",
+        title=None,
+        body=caption,
+        metadata={
+            "image_url": image_url,
+            "source_kind": source_kind,
+            "source_ref_id": source_ref_id,
+            "scheduled_for": scheduled_for,
+        },
+    )
+
+    result = publisher.publish(payload)
+    if result.published:
+        _create_audit_log(
+            session,
+            platform="instagram",
+            workspace_id=workspace_id,
+            action=action,
+            text=caption,
+            status="published",
+            external_post_id=result.external_id,
+            payload={
+                "image_url": image_url,
+                "scheduled_for": scheduled_for,
+                "provider_payload": result.payload,
+            },
+        )
+        record_usage(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            amount=1,
+            payload={
+                "external_post_id": result.external_id,
+                "image_url": image_url,
+                "scheduled_for": scheduled_for,
+            },
+        )
+        session.add(
+            WorkspaceEvent(
+                workspace_id=workspace_id,
+                event_type="publish_instagram",
+                payload_json=_json_dumps(
+                    {
+                        "external_post_id": result.external_id,
+                        "source_kind": source_kind,
+                        "source_ref_id": source_ref_id,
+                        "scheduled_for": scheduled_for,
+                    }
+                ),
+            )
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=True,
+            external_post_id=result.external_id,
+            status="published",
+            message="Instagram published",
+        )
+
+    record_publish_error(workspace_id=workspace_id, channel="instagram")
+    _create_audit_log(
+        session,
+        platform="instagram",
+        workspace_id=workspace_id,
+        action=action,
+        text=caption,
+        status="failed",
+        error_message=result.message,
+        payload={
+            "image_url": image_url,
+            "scheduled_for": scheduled_for,
             "provider_payload": result.payload,
         },
     )

@@ -26,7 +26,7 @@ _DEFAULT_CHANNELS = {
 
 
 _ALLOWED_CHANNELS = set(_DEFAULT_CHANNELS.keys())
-_ALLOWED_QUEUE_TYPES = {"reply", "post", "email", "blog"}
+_ALLOWED_QUEUE_TYPES = {"reply", "post", "email", "blog", "instagram"}
 
 
 def _json_dumps(payload: Dict[str, Any]) -> str:
@@ -146,7 +146,7 @@ def active_limit_override(
 
     if action == "publish_reply":
         return setting.reply_limit_override
-    if action == "publish_post":
+    if action in {"publish_post", "publish_email", "publish_blog", "publish_instagram"}:
         return setting.post_limit_override
     return None
 

@@ -38,6 +38,8 @@ def test_load_plans_contains_expected_defaults(monkeypatch) -> None:
     assert plans["pro"]["max_emails_per_day"] == 5
     assert plans["free"]["max_blogs_per_day"] == 1
     assert plans["pro"]["max_blogs_per_day"] == 3
+    assert plans["free"]["max_instagram_posts_per_day"] == 1
+    assert plans["pro"]["max_instagram_posts_per_day"] == 3
 
 
 def test_check_plan_limit_uses_daily_aggregation(monkeypatch) -> None:
@@ -224,6 +226,57 @@ def test_check_plan_limit_blog_prefers_active_post_override(monkeypatch) -> None
             session,
             workspace_id=workspace.id,
             action="publish_blog",
+            requested=1,
+            usage_date=datetime.now(timezone.utc).date(),
+        )
+        assert decision.allowed is True
+        assert decision.limit == 2
+        assert decision.used == 1
+        assert decision.plan.endswith(":override")
+    finally:
+        session.close()
+
+
+def test_check_plan_limit_instagram_prefers_active_post_override(monkeypatch) -> None:
+    monkeypatch.setenv("PLANS_FILE_PATH", "config/plans.yaml")
+    load_plans.cache_clear()
+
+    session = _build_session()
+    try:
+        workspace = Workspace(
+            id=str(uuid.uuid4()),
+            name="billing-instagram-override",
+            plan="free",
+            subscription_status="active",
+        )
+        session.add(workspace)
+        session.commit()
+
+        session.add(
+            WorkspaceControlSetting(
+                id=str(uuid.uuid4()),
+                workspace_id=workspace.id,
+                is_paused=False,
+                channels_json='{"x":true,"email":false,"blog":false,"instagram":true}',
+                post_limit_override=2,
+                limit_override_expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+        )
+        session.commit()
+
+        record_usage(
+            session,
+            workspace_id=workspace.id,
+            action="publish_instagram",
+            amount=1,
+            payload={"source": "test"},
+        )
+        session.commit()
+
+        decision = check_plan_limit(
+            session,
+            workspace_id=workspace.id,
+            action="publish_instagram",
             requested=1,
             usage_date=datetime.now(timezone.utc).date(),
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List
 
 from sqlalchemy import asc, select
@@ -21,7 +22,7 @@ from src.core.config import get_settings
 from src.daily_post.service import generate_daily_post
 from src.domain.agents.pipeline import evaluate_candidate_bundle
 from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
-from src.publishing.service import publish_blog, publish_email, publish_post, publish_reply
+from src.publishing.service import publish_blog, publish_email, publish_instagram, publish_post, publish_reply
 from src.storage.models import ApprovalQueueItem
 
 if TYPE_CHECKING:
@@ -46,6 +47,23 @@ def _parse_run_request(context: "CommandContext") -> tuple[str | None, bool]:
         if normalized in {"--dry-run", "dry_run=true", "dryrun=true"}:
             dry_run = True
     return pipeline, dry_run
+
+
+def _parse_scheduled_for(metadata: Dict[str, Any]) -> datetime | None:
+    raw_value = metadata.get("scheduled_for")
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def _run_ingest_open_calls(context: "CommandContext", *, dry_run: bool) -> Dict[str, Any]:
@@ -154,13 +172,20 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
 
     published = 0
     failed = 0
+    scheduled_pending = 0
 
     for item in approved_items:
+        metadata = parse_queue_metadata(item)
+        if item.item_type == "instagram":
+            scheduled_for = _parse_scheduled_for(metadata)
+            if scheduled_for is not None and scheduled_for > datetime.now(timezone.utc):
+                scheduled_pending += 1
+                continue
+
         if dry_run:
             published += 1
             continue
 
-        metadata = parse_queue_metadata(item)
         if item.item_type == "reply":
             in_reply_to_tweet_id = str(metadata.get("in_reply_to_tweet_id") or "").strip()
             if not in_reply_to_tweet_id:
@@ -209,6 +234,20 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                 source_kind=item.source_kind,
                 source_ref_id=item.source_ref_id,
             )
+        elif item.item_type == "instagram":
+            scheduled_for = _parse_scheduled_for(metadata)
+            image_url = str(
+                metadata.get("image_url") or metadata.get("media_url") or metadata.get("asset_url") or ""
+            ).strip()
+            result = publish_instagram(
+                context.session,
+                workspace_id=workspace_id,
+                caption=item.content_text,
+                image_url=(image_url or None),
+                source_kind=item.source_kind,
+                source_ref_id=item.source_ref_id,
+                scheduled_for=(scheduled_for.isoformat() if scheduled_for is not None else None),
+            )
         else:
             mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")
             failed += 1
@@ -226,6 +265,7 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
         "approved_items": len(approved_items),
         "published": published,
         "failed": failed,
+        "scheduled_pending": scheduled_pending,
     }
 
 
@@ -306,6 +346,36 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
                 },
             )
             queued_types.append("blog")
+
+        if "instagram" in channel_targets:
+            settings = get_settings()
+            instagram_preview = previews.get("instagram") or {}
+            instagram_caption = str(instagram_preview.get("body") or result.text)
+            instagram_metadata = instagram_preview.get("metadata")
+            preview_metadata = instagram_metadata if isinstance(instagram_metadata, dict) else {}
+            queue_metadata: Dict[str, Any] = {
+                "draft_id": result.draft_id,
+                "image_url": str(preview_metadata.get("image_url") or "").strip(),
+            }
+            if settings.instagram_default_schedule_hours_ahead > 0:
+                scheduled_for = datetime.now(timezone.utc) + timedelta(
+                    hours=settings.instagram_default_schedule_hours_ahead
+                )
+                queue_metadata["scheduled_for"] = scheduled_for.isoformat()
+
+            create_queue_item(
+                context.session,
+                workspace_id=context.envelope.workspace_id,
+                item_type="instagram",
+                content_text=instagram_caption,
+                source_kind="daily_post_draft",
+                source_ref_id=result.draft_id,
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key=f"daily_post_instagram:{result.draft_id}",
+                metadata=queue_metadata,
+            )
+            queued_types.append("instagram")
 
     return {
         "status": "ok",

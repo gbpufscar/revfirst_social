@@ -22,6 +22,7 @@ _ACTION_TO_LIMIT_KEY = {
     "publish_post": "max_posts_per_day",
     "publish_email": "max_emails_per_day",
     "publish_blog": "max_blogs_per_day",
+    "publish_instagram": "max_instagram_posts_per_day",
 }
 
 
@@ -112,6 +113,9 @@ def handle(context: "CommandContext") -> ControlResponse:
         },
         "blog": {
             "published_today": int(usage_map.get("publish_blog", 0)),
+        },
+        "instagram": {
+            "published_today": int(usage_map.get("publish_instagram", 0)),
         },
         "queue": {
             "pending": int(queue_counter.get("pending", 0)),
