@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping, Optional
 
 from src.domain.agents.contracts import ReplyDraft
+from src.domain.content import ContentObject
 
 
 _HYPE_TERMS = {
@@ -69,6 +70,45 @@ def generate_reply_draft(
     )
 
 
+def reply_draft_to_content_object(draft: ReplyDraft) -> ContentObject:
+    metadata: dict[str, Any] = {
+        "intent": draft.intent,
+        "confidence": draft.confidence,
+        "tags": list(draft.tags),
+    }
+    if draft.source_tweet_id:
+        metadata["in_reply_to_tweet_id"] = draft.source_tweet_id
+
+    return ContentObject(
+        workspace_id=draft.workspace_id,
+        content_type="reply",
+        body=draft.text,
+        metadata=metadata,
+        channel_targets=["x"],
+        source_agent="reply_writer",
+    )
+
+
+def generate_reply_content_object(
+    *,
+    workspace_id: str,
+    source_tweet_id: Optional[str],
+    source_text: str,
+    intent: str,
+    opportunity_score: int,
+    max_chars: int = 280,
+) -> ContentObject:
+    draft = generate_reply_draft(
+        workspace_id=workspace_id,
+        source_tweet_id=source_tweet_id,
+        source_text=source_text,
+        intent=intent,
+        opportunity_score=opportunity_score,
+        max_chars=max_chars,
+    )
+    return reply_draft_to_content_object(draft)
+
+
 def generate_reply_from_candidate(candidate: Mapping[str, Any], *, max_chars: int = 280) -> ReplyDraft:
     return generate_reply_draft(
         workspace_id=str(candidate.get("workspace_id") or ""),
@@ -78,3 +118,12 @@ def generate_reply_from_candidate(candidate: Mapping[str, Any], *, max_chars: in
         opportunity_score=int(candidate.get("opportunity_score") or 0),
         max_chars=max_chars,
     )
+
+
+def generate_reply_content_from_candidate(
+    candidate: Mapping[str, Any],
+    *,
+    max_chars: int = 280,
+) -> ContentObject:
+    draft = generate_reply_from_candidate(candidate, max_chars=max_chars)
+    return reply_draft_to_content_object(draft)

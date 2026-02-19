@@ -63,6 +63,10 @@ def generate_daily_post_endpoint(
         external_post_id=result.external_post_id,
         seed_count=result.seed_count,
         message=result.message,
+        content_object=result.content_object,
+        channel_targets=result.channel_targets,
+        blocked_channels=result.blocked_channels,
+        channel_previews=result.channel_previews,
     )
 
 
@@ -98,4 +102,3 @@ def list_daily_posts_endpoint(
             for item in drafts
         ],
     )
-

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +27,10 @@ class DailyPostGenerateResponse(BaseModel):
     external_post_id: Optional[str] = None
     seed_count: int = Field(ge=0)
     message: str
+    content_object: Dict[str, Any] = Field(default_factory=dict)
+    channel_targets: List[str] = Field(default_factory=list)
+    blocked_channels: Dict[str, str] = Field(default_factory=dict)
+    channel_previews: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
 
 class DailyPostDraftItem(BaseModel):
@@ -44,4 +48,3 @@ class DailyPostDraftItem(BaseModel):
 class DailyPostDraftListResponse(BaseModel):
     workspace_id: str
     items: List[DailyPostDraftItem]
-

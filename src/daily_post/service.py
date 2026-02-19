@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime, timezone
 import json
 import re
@@ -12,10 +13,16 @@ import uuid
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from src.channels.blog.formatter import BlogFormatter
+from src.channels.email.formatter import EmailFormatter
+from src.channels.instagram.formatter import InstagramFormatter
+from src.channels.x.formatter import XFormatter
 from src.core.config import get_settings
 from src.core.metrics import record_daily_post_published, record_seed_used
 from src.domain.agents.anti_cringe_guard import evaluate_cringe
 from src.domain.agents.brand_consistency import validate_brand_consistency
+from src.domain.content import ContentObject
+from src.domain.routing.channel_router import route_content_object
 from src.integrations.telegram.service import list_recent_telegram_seeds
 from src.integrations.x.x_client import XClient
 from src.publishing.service import publish_post
@@ -64,6 +71,10 @@ class DailyPostResult:
     external_post_id: Optional[str]
     seed_count: int
     message: str
+    content_object: Dict[str, Any] = field(default_factory=dict)
+    channel_targets: List[str] = field(default_factory=list)
+    blocked_channels: Dict[str, str] = field(default_factory=dict)
+    channel_previews: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 def _json_dump(payload: Any) -> str:
@@ -146,6 +157,56 @@ def _compose_daily_post(*, topic: str, style_memory: Dict[str, Any]) -> str:
     return f"{sentence_1}. {sentence_2}. {sentence_3}."
 
 
+def _build_content_object(
+    *,
+    workspace_id: str,
+    topic: str,
+    text: str,
+    style_memory: Dict[str, Any],
+    seed_ids: List[str],
+) -> ContentObject:
+    title = f"Founder note: {topic}".strip()
+    return ContentObject(
+        workspace_id=workspace_id,
+        content_type="short_post",
+        title=title[:120],
+        body=text,
+        metadata={
+            "topic": topic,
+            "style_memory": style_memory,
+            "seed_ids": list(seed_ids),
+        },
+        channel_targets=["x", "email", "blog", "instagram"],
+        source_agent="daily_post_writer",
+    )
+
+
+def _build_channel_previews(
+    *,
+    content: ContentObject,
+    targets: List[str],
+) -> Dict[str, Dict[str, Any]]:
+    settings = get_settings()
+    formatters = {
+        "x": XFormatter(max_chars=settings.publish_max_text_chars),
+        "email": EmailFormatter(),
+        "blog": BlogFormatter(),
+        "instagram": InstagramFormatter(),
+    }
+    previews: Dict[str, Dict[str, Any]] = {}
+    for target in targets:
+        formatter = formatters.get(target)
+        if formatter is None:
+            continue
+        payload = formatter.format(content)
+        previews[target] = {
+            "title": payload.title,
+            "body": payload.body,
+            "metadata": payload.metadata,
+        }
+    return previews
+
+
 def _create_draft(
     session: Session,
     *,
@@ -204,6 +265,23 @@ def generate_daily_post(
 
     resolved_topic = _clean_topic(topic)
     text = _compose_daily_post(topic=resolved_topic, style_memory=style_memory)
+    seed_ids = [seed.id for seed in seeds]
+    content_object = _build_content_object(
+        workspace_id=workspace_id,
+        topic=resolved_topic,
+        text=text,
+        style_memory=style_memory,
+        seed_ids=seed_ids,
+    )
+    route_decision = route_content_object(
+        session,
+        content=content_object,
+        enforce_plan_limits=auto_publish,
+    )
+    channel_previews = _build_channel_previews(
+        content=content_object,
+        targets=route_decision.resolved_targets,
+    )
 
     brand = validate_brand_consistency(text)
     cringe = evaluate_cringe(text)
@@ -215,7 +293,7 @@ def generate_daily_post(
             topic=resolved_topic,
             text=text,
             style_memory=style_memory,
-            seed_ids=[seed.id for seed in seeds],
+            seed_ids=seed_ids,
             status="blocked_guard",
             brand_score=brand.score,
             brand_violations=brand.violations,
@@ -246,6 +324,10 @@ def generate_daily_post(
             external_post_id=None,
             seed_count=len(seeds),
             message="Daily post blocked by guards",
+            content_object=content_object.model_dump(),
+            channel_targets=route_decision.resolved_targets,
+            blocked_channels=route_decision.blocked_targets,
+            channel_previews=channel_previews,
         )
 
     draft = _create_draft(
@@ -254,7 +336,7 @@ def generate_daily_post(
         topic=resolved_topic,
         text=text,
         style_memory=style_memory,
-        seed_ids=[seed.id for seed in seeds],
+        seed_ids=seed_ids,
         status="ready",
         brand_score=brand.score,
         brand_violations=brand.violations,
@@ -270,16 +352,20 @@ def generate_daily_post(
     external_post_id: Optional[str] = None
     message = "Daily post generated and ready"
     if auto_publish:
-        publish_result = publish_post(
-            session,
-            workspace_id=workspace_id,
-            text=draft.content_text,
-            x_client=x_client,
-        )
-        status = "published" if publish_result.published else publish_result.status
-        published = publish_result.published
-        external_post_id = publish_result.external_post_id
-        message = publish_result.message
+        if "x" not in route_decision.resolved_targets:
+            status = "blocked_channel"
+            message = route_decision.blocked_targets.get("x", "X channel unavailable")
+        else:
+            publish_result = publish_post(
+                session,
+                workspace_id=workspace_id,
+                text=draft.content_text,
+                x_client=x_client,
+            )
+            status = "published" if publish_result.published else publish_result.status
+            published = publish_result.published
+            external_post_id = publish_result.external_post_id
+            message = publish_result.message
 
         fresh = session.scalar(
             select(DailyPostDraft).where(
@@ -289,12 +375,12 @@ def generate_daily_post(
         )
         if fresh is not None:
             fresh.status = status
-            fresh.publish_action = "publish_post"
+            fresh.publish_action = "publish_post" if "x" in route_decision.resolved_targets else None
             fresh.external_post_id = external_post_id
-            fresh.error_message = None if publish_result.published else publish_result.message
+            fresh.error_message = None if published else message
             fresh.updated_at = datetime.now(timezone.utc)
         session.commit()
-        if publish_result.published:
+        if published:
             record_daily_post_published(workspace_id=workspace_id)
 
     event_type = "daily_post_published" if published else "daily_post_ready"
@@ -310,6 +396,8 @@ def generate_daily_post(
                     "status": status,
                     "published": published,
                     "external_post_id": external_post_id,
+                    "resolved_channels": route_decision.resolved_targets,
+                    "blocked_channels": route_decision.blocked_targets,
                 }
             ),
         )
@@ -329,6 +417,10 @@ def generate_daily_post(
         external_post_id=external_post_id,
         seed_count=len(seeds),
         message=message,
+        content_object=content_object.model_dump(),
+        channel_targets=route_decision.resolved_targets,
+        blocked_channels=route_decision.blocked_targets,
+        channel_previews=channel_previews,
     )
 
 
