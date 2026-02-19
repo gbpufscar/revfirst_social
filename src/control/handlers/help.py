@@ -17,6 +17,7 @@ def handle(context: "CommandContext") -> ControlResponse:
         "/status",
         "/metrics",
         "/daily_report",
+        "/weekly_report",
         "/queue",
         "/approve <queue_id>",
         "/reject <queue_id>",

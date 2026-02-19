@@ -18,6 +18,7 @@ from src.control.handlers import (
     metrics,
     pause,
     queue,
+    report,
     run,
     seed,
     status,
@@ -41,15 +42,12 @@ class CommandContext:
 Handler = Callable[[CommandContext], ControlResponse]
 
 
-def _handle_daily_report(context: CommandContext) -> ControlResponse:
-    return metrics.handle(context)
-
-
 _HANDLER_MAP: Dict[str, Handler] = {
     "help": help_handler.handle,
     "status": status.handle,
     "metrics": metrics.handle,
-    "daily_report": _handle_daily_report,
+    "daily_report": report.handle_daily,
+    "weekly_report": report.handle_weekly,
     "queue": queue.handle,
     "approve": approve.handle,
     "reject": approve.handle_reject,

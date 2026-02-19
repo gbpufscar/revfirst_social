@@ -600,6 +600,94 @@ class ApprovalQueueItem(Base):
     )
 
 
+class MediaAsset(Base):
+    __tablename__ = "media_assets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False, default="generated")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="mock")
+    purpose: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(64), nullable=False, default="image/png")
+    width: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    storage_backend: Mapped[str] = mapped_column(String(24), nullable=False, default="external_url")
+    storage_path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    public_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    prompt_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_media_assets_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_media_assets_workspace_channel_created_at", "workspace_id", "channel", "created_at"),
+    )
+
+
+class MediaJob(Base):
+    __tablename__ = "media_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="mock")
+    channel: Mapped[str] = mapped_column(String(24), nullable=False)
+    prompt_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    source_ref_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    requested_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    result_asset_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("media_assets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    error_message: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "idempotency_key", name="uq_media_jobs_workspace_idempotency"),
+        Index("ix_media_jobs_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_media_jobs_workspace_status_created_at", "workspace_id", "status", "created_at"),
+    )
+
+
 class PipelineRun(Base):
     __tablename__ = "pipeline_runs"
 

@@ -1,7 +1,7 @@
 # Control Plane Permissions Matrix
 
-Status: Active (Phase 12)  
-Last Updated: 2026-02-18
+Status: Active (Phase 12+)  
+Last Updated: 2026-02-19
 
 ## Roles
 
@@ -16,7 +16,8 @@ Last Updated: 2026-02-18
 | `/help` | yes | yes | yes | Read-only help text |
 | `/status` | yes | yes | yes | Runtime and lock status |
 | `/metrics` | yes | yes | yes | Daily summary and plan usage |
-| `/daily_report` | yes | yes | yes | Alias for `/metrics` |
+| `/daily_report` | yes | yes | yes | Reporting agent daily summary |
+| `/weekly_report` | yes | yes | yes | Reporting agent weekly summary |
 | `/queue` | yes | yes | yes | Read-only queue preview |
 | `/approve <id>` | yes | yes | no | Mutating, idempotent |
 | `/reject <id>` | yes | yes | no | Mutating |

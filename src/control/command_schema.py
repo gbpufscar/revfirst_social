@@ -50,7 +50,17 @@ def parse_command(text: str) -> Optional[ControlCommand]:
     command_name = normalize_command_name(parts[0])
     remainder = parts[1].strip() if len(parts) > 1 else ""
 
-    if command_name in {"help", "status", "metrics", "queue", "pause", "resume", "daily_report", "logs"}:
+    if command_name in {
+        "help",
+        "status",
+        "metrics",
+        "queue",
+        "pause",
+        "resume",
+        "daily_report",
+        "weekly_report",
+        "logs",
+    }:
         args = remainder.split() if remainder else []
         return ControlCommand(name=command_name, args=args, raw_text=stripped)
 

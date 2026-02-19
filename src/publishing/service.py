@@ -633,6 +633,7 @@ def publish_blog(
     workspace_id: str,
     title: str,
     markdown: str,
+    image_url: Optional[str] = None,
     blog_publisher: Optional[BlogPublisher] = None,
     source_kind: Optional[str] = None,
     source_ref_id: Optional[str] = None,
@@ -657,6 +658,7 @@ def publish_blog(
             error_message="Plan limit exceeded",
             payload={
                 "title": title,
+                "image_url": image_url,
                 "limit": limit_decision.limit,
                 "used": limit_decision.used,
                 "requested": 1,
@@ -680,6 +682,7 @@ def publish_blog(
         metadata={
             "source_kind": source_kind,
             "source_ref_id": source_ref_id,
+            "image_url": image_url,
         },
     )
 
@@ -695,6 +698,7 @@ def publish_blog(
             external_post_id=result.external_id,
             payload={
                 "title": title,
+                "image_url": image_url,
                 "provider_payload": result.payload,
             },
         )
@@ -739,6 +743,7 @@ def publish_blog(
         error_message=result.message,
         payload={
             "title": title,
+            "image_url": image_url,
             "provider_payload": result.payload,
         },
     )
