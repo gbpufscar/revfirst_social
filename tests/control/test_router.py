@@ -150,3 +150,68 @@ def test_run_daily_post_queues_email_when_channel_enabled(monkeypatch, tmp_path)
             assert "email" in item_types
     finally:
         teardown_control_test_context()
+
+
+def test_run_daily_post_queues_blog_when_channel_enabled(monkeypatch, tmp_path) -> None:
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        manual_seed = context.client.post(
+            "/integrations/telegram/seed/manual",
+            json={
+                "workspace_id": context.workspace_id,
+                "text": "Builders gain momentum when posts become long-form guides with explicit examples.",
+                "source_chat_id": "manual-chat",
+                "source_message_id": "manual-seed-blog-1",
+            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+        assert manual_seed.status_code == 200
+
+        enable_blog = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2301,
+                "message": {
+                    "message_id": 731,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/channel enable blog",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert enable_blog.status_code == 200
+        assert enable_blog.json()["accepted"] is True
+
+        run_daily_post = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2302,
+                "message": {
+                    "message_id": 732,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/run daily_post",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert run_daily_post.status_code == 200
+        payload = run_daily_post.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "pipeline_executed"
+        assert "blog" in payload["data"]["result"]["queued_types"]
+
+        with context.session_factory() as session:
+            queued_items = list(
+                session.scalars(
+                    select(ApprovalQueueItem).where(
+                        ApprovalQueueItem.workspace_id == context.workspace_id,
+                    )
+                ).all()
+            )
+            item_types = {item.item_type for item in queued_items}
+            assert "post" in item_types
+            assert "blog" in item_types
+    finally:
+        teardown_control_test_context()

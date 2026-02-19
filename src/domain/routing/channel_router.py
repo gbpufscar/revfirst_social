@@ -140,6 +140,8 @@ def _action_for_target(content: ContentObject, target: str) -> Optional[str]:
         return "publish_post"
     if normalized == "email":
         return "publish_email"
+    if normalized == "blog":
+        return "publish_blog"
     return None
 
 

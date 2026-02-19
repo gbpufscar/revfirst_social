@@ -1,4 +1,4 @@
-"""Blog channel adapter stubs."""
+"""Blog channel adapter."""
 
 from src.channels.blog.formatter import BlogFormatter
 from src.channels.blog.publisher import BlogPublisher

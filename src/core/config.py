@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     email_api_timeout_seconds: int = 20
     email_from_address: str = ""
     email_default_recipients: str = ""
+    blog_webhook_url: str = ""
+    blog_webhook_token: str = ""
+    blog_webhook_timeout_seconds: int = 20
     x_default_open_calls_query: str = (
         "\"drop your saas\" OR \"share your startup\" OR \"what are you building\" "
         "OR \"show your product\" lang:en -is:retweet"

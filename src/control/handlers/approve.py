@@ -13,7 +13,7 @@ from src.control.services import (
     mark_queue_item_rejected,
     parse_queue_metadata,
 )
-from src.publishing.service import publish_email, publish_post, publish_reply
+from src.publishing.service import publish_blog, publish_email, publish_post, publish_reply
 
 if TYPE_CHECKING:
     from src.control.command_router import CommandContext
@@ -107,6 +107,15 @@ def handle(context: "CommandContext") -> ControlResponse:
             subject=str(metadata.get("subject") or "RevFirst update"),
             body=item.content_text,
             recipients=recipients,
+            source_kind=item.source_kind,
+            source_ref_id=item.source_ref_id,
+        )
+    elif item.item_type == "blog":
+        result = publish_blog(
+            context.session,
+            workspace_id=workspace_id,
+            title=str(metadata.get("title") or "RevFirst blog draft"),
+            markdown=item.content_text,
             source_kind=item.source_kind,
             source_ref_id=item.source_ref_id,
         )
