@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     instagram_graph_api_timeout_seconds: int = 20
     instagram_default_image_url: str = ""
     instagram_default_schedule_hours_ahead: int = 0
+    app_public_base_url: str = ""
+    media_storage_path: str = "data/media"
+    image_generation_enabled: bool = True
+    image_provider: str = "mock"
+    image_webhook_url: str = ""
+    image_webhook_token: str = ""
+    image_webhook_timeout_seconds: int = 20
+    gemini_image_api_key: str = ""
+    gemini_image_model: str = "gemini-2.0-flash-preview-image-generation"
+    gemini_image_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
+    gemini_image_timeout_seconds: int = 30
     x_default_open_calls_query: str = (
         "\"drop your saas\" OR \"share your startup\" OR \"what are you building\" "
         "OR \"show your product\" lang:en -is:retweet"
@@ -90,6 +101,8 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("IP_RATE_LIMIT_WINDOW_SECONDS must be positive.")
     if settings.instagram_default_schedule_hours_ahead < 0:
         raise ValueError("INSTAGRAM_DEFAULT_SCHEDULE_HOURS_AHEAD must be zero or positive.")
+    if settings.image_provider.strip().lower() not in {"mock", "webhook", "gemini"}:
+        raise ValueError("IMAGE_PROVIDER must be one of: mock, webhook, gemini.")
     return settings
 
 

@@ -22,6 +22,7 @@ from src.core.config import get_settings
 from src.daily_post.service import generate_daily_post
 from src.domain.agents.pipeline import evaluate_candidate_bundle
 from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
+from src.media.service import generate_image_asset
 from src.publishing.service import publish_blog, publish_email, publish_instagram, publish_post, publish_reply
 from src.storage.models import ApprovalQueueItem
 
@@ -226,11 +227,13 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                 source_ref_id=item.source_ref_id,
             )
         elif item.item_type == "blog":
+            image_url = str(metadata.get("image_url") or "").strip()
             result = publish_blog(
                 context.session,
                 workspace_id=workspace_id,
                 title=str(metadata.get("title") or "RevFirst blog draft"),
                 markdown=item.content_text,
+                image_url=(image_url or None),
                 source_kind=item.source_kind,
                 source_ref_id=item.source_ref_id,
             )
@@ -287,10 +290,46 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
         }
 
     queued_types: list[str] = []
+    blocked_channels: Dict[str, str] = {}
+    generated_images: Dict[str, Dict[str, Any]] = {}
     if result.status == "ready":
         channel_targets = list(result.channel_targets)
         previews = dict(result.channel_previews)
+
+        for channel in ["x", "blog", "instagram"]:
+            if channel not in channel_targets:
+                continue
+            preview = previews.get(channel) or {}
+            preview_metadata = preview.get("metadata")
+            metadata = preview_metadata if isinstance(preview_metadata, dict) else {}
+            existing_image_url = str(metadata.get("image_url") or "").strip()
+            if existing_image_url:
+                generated_images[channel] = {
+                    "status": "existing",
+                    "public_url": existing_image_url,
+                    "asset_id": metadata.get("media_asset_id"),
+                }
+                continue
+
+            media_result = generate_image_asset(
+                context.session,
+                workspace_id=context.envelope.workspace_id,
+                channel=channel,
+                content_text=result.text,
+                source_kind="daily_post_draft",
+                source_ref_id=result.draft_id,
+                idempotency_key=f"daily_post_media:{channel}:{result.draft_id}",
+                metadata={"draft_id": result.draft_id, "content_type": "short_post"},
+            )
+            generated_images[channel] = {
+                "status": media_result.status,
+                "public_url": media_result.public_url,
+                "asset_id": media_result.asset_id,
+                "message": media_result.message,
+            }
+
         if "x" in channel_targets:
+            x_image_info = generated_images.get("x") or {}
             create_queue_item(
                 context.session,
                 workspace_id=context.envelope.workspace_id,
@@ -301,7 +340,11 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
                 intent="daily_post",
                 opportunity_score=100,
                 idempotency_key=f"daily_post:{result.draft_id}",
-                metadata={"draft_id": result.draft_id},
+                metadata={
+                    "draft_id": result.draft_id,
+                    "image_url": x_image_info.get("public_url"),
+                    "media_asset_id": x_image_info.get("asset_id"),
+                },
             )
             queued_types.append("post")
 
@@ -330,6 +373,7 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
             blog_preview = previews.get("blog") or {}
             blog_title = str(blog_preview.get("title") or "RevFirst blog draft")
             blog_body = str(blog_preview.get("body") or result.text)
+            blog_image_info = generated_images.get("blog") or {}
             create_queue_item(
                 context.session,
                 workspace_id=context.envelope.workspace_id,
@@ -343,6 +387,8 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
                 metadata={
                     "draft_id": result.draft_id,
                     "title": blog_title,
+                    "image_url": blog_image_info.get("public_url"),
+                    "media_asset_id": blog_image_info.get("asset_id"),
                 },
             )
             queued_types.append("blog")
@@ -353,9 +399,26 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
             instagram_caption = str(instagram_preview.get("body") or result.text)
             instagram_metadata = instagram_preview.get("metadata")
             preview_metadata = instagram_metadata if isinstance(instagram_metadata, dict) else {}
+            instagram_image_info = generated_images.get("instagram") or {}
+            resolved_image_url = str(
+                preview_metadata.get("image_url") or instagram_image_info.get("public_url") or ""
+            ).strip()
+            if not resolved_image_url:
+                blocked_channels["instagram"] = "image_unavailable"
+                return {
+                    "status": "ok",
+                    "draft_id": result.draft_id,
+                    "draft_status": result.status,
+                    "seed_count": result.seed_count,
+                    "queued": len(queued_types),
+                    "queued_types": queued_types,
+                    "blocked_channels": blocked_channels,
+                    "generated_images": generated_images,
+                }
             queue_metadata: Dict[str, Any] = {
                 "draft_id": result.draft_id,
-                "image_url": str(preview_metadata.get("image_url") or "").strip(),
+                "image_url": resolved_image_url,
+                "media_asset_id": instagram_image_info.get("asset_id"),
             }
             if settings.instagram_default_schedule_hours_ahead > 0:
                 scheduled_for = datetime.now(timezone.utc) + timedelta(
@@ -384,6 +447,8 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
         "seed_count": result.seed_count,
         "queued": len(queued_types),
         "queued_types": queued_types,
+        "blocked_channels": blocked_channels,
+        "generated_images": generated_images,
     }
 
 

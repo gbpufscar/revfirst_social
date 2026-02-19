@@ -135,11 +135,13 @@ def handle(context: "CommandContext") -> ControlResponse:
             source_ref_id=item.source_ref_id,
         )
     elif item.item_type == "blog":
+        image_url = str(metadata.get("image_url") or "").strip()
         result = publish_blog(
             context.session,
             workspace_id=workspace_id,
             title=str(metadata.get("title") or "RevFirst blog draft"),
             markdown=item.content_text,
+            image_url=(image_url or None),
             source_kind=item.source_kind,
             source_ref_id=item.source_ref_id,
         )

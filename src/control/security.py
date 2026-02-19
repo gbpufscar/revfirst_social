@@ -44,6 +44,7 @@ COMMAND_ROLE_MATRIX: Dict[str, Set[str]] = {
     "status": {"owner", "admin", "member"},
     "metrics": {"owner", "admin", "member"},
     "daily_report": {"owner", "admin", "member"},
+    "weekly_report": {"owner", "admin", "member"},
     "logs": {"owner", "admin", "member"},
     "queue": {"owner", "admin", "member"},
     "approve": {"owner", "admin"},

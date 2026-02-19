@@ -33,12 +33,14 @@ Canonical Authority: `/docs/PROJECT_CANONICAL.md`
 14. Email Module (Real Publisher)
 15. Blog Module (Real Publisher)
 16. Instagram Module (Real Publisher)
-17. Controlled Beta (2-5 workspaces)
+16.5. Media Infrastructure + Image Agent
+16.6. Reporting Agent on Telegram
+17. Controlled Beta (2-5 workspaces + dashboard web)
 18. Enterprise Hardening
 
 Strategic sequence summary:
 
-`Foundation -> Isolation -> Billing -> Usage -> Ingestion -> Agents -> Publish -> Locks -> Intelligence -> Hardening -> Excellence -> Control -> Abstraction -> Channels -> Beta -> Enterprise`
+`Foundation -> Isolation -> Billing -> Usage -> Ingestion -> Agents -> Publish -> Locks -> Intelligence -> Hardening -> Excellence -> Control -> Abstraction -> Channels -> Media+Images -> Reporting -> Beta -> Enterprise`
 
 ---
 
@@ -381,17 +383,69 @@ Scope:
 Done when:
 - Instagram publish flow is stable under approval and limit checks.
 
-### Phase 17 - Controlled Beta (2-5 workspaces)
-Objective: expand safely with feature flags and observability.
+### Phase 16.5 - Media Infrastructure + Image Agent
+Objective: provide production-grade image generation/storage so channels can publish with media safely.
+
+Scope:
+- Add tenant-isolated media tables:
+  - `media_assets`
+  - `media_jobs`
+- Persist media metadata and generation audit trail with RLS.
+- Add provider abstraction for image generation:
+  - `mock`
+  - `webhook`
+  - `gemini`
+- Add image agent with channel-aware sizing:
+  - Instagram: `1080x1350`
+  - X: `1600x900`
+  - Blog: `1200x630`
+- Add media API:
+  - `POST /media/generate`
+  - `GET /media/assets/{workspace_id}`
+  - `GET /media/public/{asset_id}`
+- Integrate with daily post queue so Instagram/Blog can receive image URLs by default.
+
+Done when:
+- Image jobs and assets are auditable per workspace.
+- Instagram queue items include valid image URL path.
+- Media library is queryable by workspace.
+
+### Phase 16.6 - Reporting Agent on Telegram
+Objective: provide operational and performance reporting directly in command center.
+
+Scope:
+- Create reporting service with daily/weekly aggregation:
+  - usage
+  - publish outcomes
+  - queue health
+  - top errors
+  - recommendations
+- Add Telegram commands:
+  - `/daily_report`
+  - `/weekly_report`
+- Keep reports workspace-scoped and auditable via `admin_actions`.
+
+Done when:
+- `/daily_report` returns actionable daily summary.
+- `/weekly_report` returns weekly trend summary and recommendations.
+
+### Phase 17 - Controlled Beta (2-5 workspaces + Dashboard Web)
+Objective: expand safely with feature flags, observability, and web operations view.
 
 Scope:
 - Onboard 2-5 workspaces with staged rollout.
 - Enable channel features progressively by flag.
 - Track tenant isolation and operational quality metrics.
+- Deliver dashboard web for operational visibility:
+  - workspace state
+  - queue and publish outcomes
+  - media library and job health
+  - KPI summaries and trend charts
 
 Done when:
 - No cross-workspace leakage.
 - No unresolved critical incidents during beta window.
+- Dashboard enables workspace operators to monitor and act without direct DB access.
 
 ### Phase 18 - Enterprise Hardening
 Objective: finalize enterprise-grade controls after product behavior is stable.
@@ -454,7 +508,9 @@ Status legend: `NOT_STARTED`, `IN_PROGRESS`, `DONE`, `BLOCKED`
 | 14 | Email Module (Real) | DONE | 2026-02-19 | 2026-02-19 | Added real email provider integration (`src/integrations/email/resend_client.py`) and upgraded email publisher from stub to live provider-backed send path with recipients/from-address controls. Added `publish_email` service with plan limits, usage aggregation (`publish_email`), audit log (`publish_audit_logs` platform `email`), and workspace event emission. Integrated approval flow (`/approve`) and manual pipeline execution (`/run daily_post`, `/run execute_approved`) for `email` queue items. Validation: `ruff` and `pytest` passed (77 tests), including new tests for email publish service, billing limits, control-plane email approval, and daily-post email queueing. |
 | 15 | Blog Module (Real) | DONE | 2026-02-19 | 2026-02-19 | Added real blog publishing via webhook provider integration (`src/integrations/blog/webhook_client.py`) and upgraded `BlogPublisher` from stub to live publish path. Added `publish_blog` service with plan-limit enforcement, usage aggregation (`publish_blog`), audit logging (`publish_audit_logs` platform `blog`), and workspace event emission. Integrated control-plane approval and execution flows for `blog` queue items and extended daily-post queue expansion when blog channel is enabled. Validation: `ruff` and `pytest` passed (83 tests), including new tests for blog publish service, billing limits, and control-plane blog queue/publish behavior. |
 | 16 | Instagram Module (Real) | DONE | 2026-02-19 | 2026-02-19 | Added Meta Graph integration (`src/integrations/instagram/graph_client.py`) and upgraded Instagram publisher from stub to live publish flow. Added `publish_instagram` service with plan-limit enforcement, usage aggregation (`publish_instagram`), audit logging (`publish_audit_logs` platform `instagram`), and workspace event emission. Integrated control-plane approval/execution for `instagram` queue items plus scheduling hooks (`scheduled_for`) and daily-post queue expansion when Instagram channel is enabled. Validation: `ruff` and `pytest` passed, including new tests for Instagram publish path and scheduler-aware execution behavior. |
-| 17 | Controlled Beta (2-5 workspaces) | NOT_STARTED | - | - | Planned: staged rollout by feature flags with strict isolation validation. |
+| 16.5 | Media Infrastructure + Image Agent | DONE | 2026-02-19 | 2026-02-19 | Added media domain tables (`media_assets`, `media_jobs`) with Alembic migration `20260219_0008` and PostgreSQL RLS. Implemented pluggable image providers (`mock`, `webhook`, `gemini`), image-agent service, and media API routes (`/media/generate`, `/media/assets/{workspace_id}`, `/media/public/{asset_id}`). Integrated image generation into `/run daily_post` queue expansion so Blog/Instagram receive image URLs and media asset references. |
+| 16.6 | Reporting Agent on Telegram | DONE | 2026-02-19 | 2026-02-19 | Added reporting service (`src/reporting/service.py`) and Telegram command handlers for `/daily_report` and `/weekly_report` with workspace-scoped aggregation (usage, publish outcomes, queue health, error highlights, recommendations). Updated command routing/parsing/help/security matrix and added automated tests for report commands. |
+| 17 | Controlled Beta (2-5 workspaces + dashboard web) | NOT_STARTED | - | - | Planned: staged rollout by feature flags with strict isolation validation and web dashboard for operational visibility. |
 | 18 | Enterprise Hardening | NOT_STARTED | - | - | Planned: advanced backups, versioning, and enterprise governance controls after behavior maturity. |
 
 Update protocol:
@@ -508,3 +564,6 @@ Update protocol:
 - 2026-02-19: Phase 16 implemented with Meta Graph-based Instagram integration (`InstagramGraphClient`) and live `InstagramPublisher`, replacing preview-only Instagram stub behavior.
 - 2026-02-19: Added `publish_instagram` service with plan-limit enforcement, usage/audit/event recording, and control-plane support for `instagram` queue lifecycle (`/approve` and `/run execute_approved`).
 - 2026-02-19: Added scheduling hooks for Instagram queue items via `scheduled_for` metadata and daily-post queue expansion when Instagram channel is enabled.
+- 2026-02-19: Phase 16.5 implemented with tenant-isolated media infrastructure (`media_assets`, `media_jobs`), image-agent provider abstraction (`mock`, `webhook`, `gemini`), and media API routes for generation/library/public fetch.
+- 2026-02-19: Daily-post run path now integrates image generation so Blog/Instagram queue items include media URLs and media asset references.
+- 2026-02-19: Phase 16.6 implemented with Telegram reporting agent (`/daily_report`, `/weekly_report`) delivering workspace-scoped operational summaries and recommendations.

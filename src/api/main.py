@@ -21,6 +21,7 @@ from src.daily_post.router import router as daily_post_router
 from src.ingestion.router import router as ingestion_router
 from src.integrations.telegram.router import router as telegram_integration_router
 from src.integrations.x.router import router as x_integration_router
+from src.media.router import router as media_router
 from src.publishing.router import router as publishing_router
 from src.storage.db import load_models
 from src.storage.db import test_connection as test_db_connection
@@ -178,3 +179,4 @@ app.include_router(control_telegram_router)
 app.include_router(ingestion_router)
 app.include_router(publishing_router)
 app.include_router(daily_post_router)
+app.include_router(media_router)
