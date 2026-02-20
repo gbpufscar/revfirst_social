@@ -273,6 +273,8 @@ class XOAuthToken(Base):
     refresh_token_encrypted: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     token_type: Mapped[str] = mapped_column(String(32), nullable=False, default="bearer")
     scope: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    account_user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    account_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

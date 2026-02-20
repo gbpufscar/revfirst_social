@@ -11,8 +11,8 @@ import src.api.main as api_main
 from src.core.config import get_settings
 from src.integrations.x.x_client import get_x_client
 from src.storage.db import Base, get_session, load_models
-from src.storage.models import DailyPostDraft, TelegramSeed, WorkspaceDailyUsage
-from src.storage.security import get_token_key
+from src.storage.models import DailyPostDraft, Role, TelegramSeed, User, WorkspaceDailyUsage, WorkspaceUser
+from src.storage.security import get_token_key, hash_password
 
 
 class _FakePublisherXClient:
@@ -138,6 +138,8 @@ def test_phase9_webhook_seed_and_generate_ready_post(monkeypatch) -> None:
 
 def test_phase9_generate_with_auto_publish_creates_post_usage(monkeypatch) -> None:
     monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
     get_settings.cache_clear()
     get_token_key.cache_clear()
 
@@ -194,7 +196,10 @@ def test_phase9_generate_with_auto_publish_creates_post_usage(monkeypatch) -> No
                 "topic": "conversion notes",
                 "auto_publish": True,
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-RevFirst-Internal-Key": "test-internal-publish-key",
+            },
         )
         assert generate.status_code == 200
         payload = generate.json()
@@ -219,6 +224,90 @@ def test_phase9_generate_with_auto_publish_creates_post_usage(monkeypatch) -> No
             ).all()
             assert len(drafts) == 1
             assert drafts[0].status == "published"
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_phase9_member_cannot_auto_publish(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, owner_token = _bootstrap_workspace(
+            client,
+            workspace_name=f"phase9-member-block-{uuid.uuid4()}",
+            owner_email="phase9-member-owner@revfirst.io",
+            owner_password="phase9-member-owner-pass",
+        )
+        assert owner_token
+
+        member_email = "phase9-member@revfirst.io"
+        member_password = "phase9-member-pass"
+        with session_factory() as seed_session:
+            member_role = seed_session.scalar(select(Role).where(Role.name == "member"))
+            assert member_role is not None
+
+            member = User(
+                id=str(uuid.uuid4()),
+                email=member_email,
+                password_hash=hash_password(member_password),
+                is_active=True,
+            )
+            seed_session.add(member)
+            seed_session.flush()
+            seed_session.add(
+                WorkspaceUser(
+                    id=str(uuid.uuid4()),
+                    workspace_id=workspace_id,
+                    user_id=member.id,
+                    role_id=member_role.id,
+                )
+            )
+            seed_session.commit()
+
+        member_login = client.post(
+            "/auth/login",
+            json={
+                "email": member_email,
+                "password": member_password,
+                "workspace_id": workspace_id,
+            },
+        )
+        assert member_login.status_code == 200
+        member_token = member_login.json()["access_token"]
+
+        generate = client.post(
+            "/daily-post/generate",
+            json={
+                "workspace_id": workspace_id,
+                "topic": "governance check",
+                "auto_publish": True,
+            },
+            headers={
+                "Authorization": f"Bearer {member_token}",
+                "X-RevFirst-Internal-Key": "test-internal-publish-key",
+            },
+        )
+        assert generate.status_code == 403
+        assert generate.json()["detail"] == "Insufficient role"
     finally:
         api_main.app.dependency_overrides.clear()
         get_token_key.cache_clear()

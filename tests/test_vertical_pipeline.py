@@ -1,57 +1,112 @@
-import os
-import sqlite3
-import tempfile
-from pathlib import Path
+from __future__ import annotations
 
-from pipelines.ingest_open_calls import run as ingest_open_calls_run
-from pipelines.propose_replies import run as propose_replies_run
-from pipelines.rank_candidates import run as rank_candidates_run
+import uuid
+
+from sqlalchemy import create_engine, select
+from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import sessionmaker
+
+import src.orchestrator.pipeline as orchestrator_pipeline
+from src.core.config import get_settings
+from src.orchestrator.pipeline import run_workspace_pipeline
+from src.storage.db import Base, load_models
+from src.storage.models import IngestionCandidate, Workspace, WorkspaceEvent
+from src.storage.security import get_token_key
+from src.integrations.x.service import upsert_workspace_x_tokens
 
 
-def test_vertical_pipeline_end_to_end() -> None:
-    old_db_path = os.environ.get("DB_PATH")
-    old_data_dir = os.environ.get("REVFIRST_DATA_DIR")
+class _FakeSearchXClient:
+    default_open_calls_query = "builder query"
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        db_path = Path(tmp_dir) / "db.sqlite"
-        data_dir = Path(tmp_dir) / "data"
+    def search_open_calls(self, *, access_token: str, query: str | None = None, max_results: int = 20):  # noqa: ARG002
+        return {
+            "data": [
+                {
+                    "id": "190000000000100001",
+                    "author_id": "5001",
+                    "conversation_id": "190000000000100001",
+                    "created_at": "2026-02-20T12:00:00Z",
+                    "public_metrics": {"like_count": 8, "reply_count": 3, "retweet_count": 1},
+                    "lang": "en",
+                    "text": "What are you building this week? Share your startup.",
+                }
+            ],
+            "includes": {
+                "users": [
+                    {
+                        "id": "5001",
+                        "username": "builder_alpha",
+                        "name": "Builder Alpha",
+                    }
+                ]
+            },
+        }
 
-        try:
-            os.environ["DB_PATH"] = str(db_path)
-            os.environ["REVFIRST_DATA_DIR"] = str(data_dir)
 
-            ingest_result = ingest_open_calls_run(limit=4)
-            rank_result = rank_candidates_run(limit=10)
-            propose_result = propose_replies_run(limit=10, min_score=0.5)
+def _build_sqlite_session_factory():
+    load_models()
+    engine = create_engine(
+        "sqlite+pysqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 
-            assert ingest_result["status"] == "ok"
-            assert ingest_result["ingested"] > 0
-            assert rank_result["status"] == "ok"
-            assert rank_result["ranked"] >= ingest_result["ingested"]
-            assert propose_result["status"] == "ok"
-            assert propose_result["proposed"] >= 1
 
-            assert (data_dir / "candidates.jsonl").exists()
-            assert (data_dir / "ranked_candidates.json").exists()
-            assert (data_dir / "proposed_replies.jsonl").exists()
-            assert (data_dir / "approved_queue.jsonl").exists()
+def test_vertical_pipeline_end_to_end_canonical(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setattr(
+        orchestrator_pipeline,
+        "evaluate_candidate_bundle",
+        lambda _: {"brand_consistency": {"passed": True}, "cringe_guard": {"passed": True}},
+    )
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
 
-            conn = sqlite3.connect(db_path)
-            candidates_count = conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0]
-            ranked_count = conn.execute("SELECT COUNT(*) FROM ranked_candidates").fetchone()[0]
-            proposed_count = conn.execute("SELECT COUNT(*) FROM proposed_replies").fetchone()[0]
-            conn.close()
+    session_factory = _build_sqlite_session_factory()
+    workspace_id = str(uuid.uuid4())
+    fake_x = _FakeSearchXClient()
 
-            assert candidates_count > 0
-            assert ranked_count > 0
-            assert proposed_count > 0
-        finally:
-            if old_db_path is None:
-                os.environ.pop("DB_PATH", None)
-            else:
-                os.environ["DB_PATH"] = old_db_path
+    try:
+        with session_factory() as session:
+            session.add(
+                Workspace(
+                    id=workspace_id,
+                    name=f"workspace-{uuid.uuid4()}",
+                    plan="free",
+                    subscription_status="active",
+                )
+            )
+            session.commit()
+            upsert_workspace_x_tokens(
+                session,
+                workspace_id=workspace_id,
+                access_token="workspace-access-token",
+                refresh_token="workspace-refresh-token",
+                scope="tweet.read users.read",
+            )
 
-            if old_data_dir is None:
-                os.environ.pop("REVFIRST_DATA_DIR", None)
-            else:
-                os.environ["REVFIRST_DATA_DIR"] = old_data_dir
+            result = run_workspace_pipeline(
+                session,
+                workspace_id=workspace_id,
+                x_client=fake_x,
+            )
+            assert result["status"] == "executed"
+            assert result["ingested"] == 1
+            assert result["stored_new"] == 1
+            assert result["evaluated_candidates"] >= 1
+
+            candidates = session.scalars(
+                select(IngestionCandidate).where(IngestionCandidate.workspace_id == workspace_id)
+            ).all()
+            assert len(candidates) == 1
+
+            events = session.scalars(
+                select(WorkspaceEvent).where(WorkspaceEvent.workspace_id == workspace_id)
+            ).all()
+            assert any(event.event_type == "ingestion_open_calls_run" for event in events)
+    finally:
+        get_token_key.cache_clear()
+        get_settings.cache_clear()

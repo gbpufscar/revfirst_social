@@ -21,6 +21,7 @@ _reply_blocked_total: Dict[Tuple[str, str], int] = defaultdict(int)
 _daily_post_published_total: Dict[str, int] = defaultdict(int)
 _seed_used_total: Dict[str, int] = defaultdict(int)
 _publish_errors_total: Dict[Tuple[str, str], int] = defaultdict(int)
+_x_token_refresh_total: Dict[Tuple[str, str], int] = defaultdict(int)
 
 
 def _escape_label(value: str) -> str:
@@ -93,6 +94,14 @@ def record_publish_error(*, workspace_id: str, channel: str, count: int = 1) -> 
         _publish_errors_total[key] += int(count)
 
 
+def record_x_token_refresh(*, workspace_id: str, status: str, count: int = 1) -> None:
+    if count <= 0:
+        return
+    with _lock:
+        key = (_normalize_label(workspace_id), _normalize_label(status))
+        _x_token_refresh_total[key] += int(count)
+
+
 def render_prometheus_metrics(*, app_name: str, app_version: str, env: str) -> str:
     uptime = max(time.time() - _started_at, 0.0)
 
@@ -107,6 +116,7 @@ def render_prometheus_metrics(*, app_name: str, app_version: str, env: str) -> s
         daily_post_published_total = dict(_daily_post_published_total)
         seed_used_total = dict(_seed_used_total)
         publish_errors_total = dict(_publish_errors_total)
+        x_token_refresh_total = dict(_x_token_refresh_total)
 
     lines = [
         "# HELP revfirst_build_info Build metadata.",
@@ -230,6 +240,20 @@ def render_prometheus_metrics(*, app_name: str, app_version: str, env: str) -> s
             )
         )
 
+    lines.extend(
+        [
+            "# HELP revfirst_x_token_refresh_total Total X token refresh outcomes.",
+            "# TYPE revfirst_x_token_refresh_total counter",
+        ]
+    )
+    for (workspace_id, status), value in sorted(x_token_refresh_total.items()):
+        lines.append(
+            (
+                f'revfirst_x_token_refresh_total{{workspace_id="{_escape_label(workspace_id)}",'
+                f'status="{_escape_label(status)}"}} {value}'
+            )
+        )
+
     lines.append("")
     return "\n".join(lines)
 
@@ -247,4 +271,5 @@ def reset_metrics_for_tests() -> None:
         _daily_post_published_total.clear()
         _seed_used_total.clear()
         _publish_errors_total.clear()
+        _x_token_refresh_total.clear()
     _started_at = time.time()
