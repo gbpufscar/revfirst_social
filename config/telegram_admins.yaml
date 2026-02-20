@@ -1,9 +1,15 @@
 # Telegram control-plane authorization map.
 # Each telegram user must be whitelisted and linked to an existing user_id.
 
-allowed_telegram_ids: []
+allowed_telegram_ids:
+  - "1023898189"
 
-admins: []
+admins:
+  - telegram_user_id: "1023898189"
+    user_id: "1cdcd0bd-3bcf-415f-8186-bbdd53d7e0e8"
+    allowed_roles:
+      - owner
+      - admin
 # Example:
 # admins:
 #   - telegram_user_id: "123456789"
