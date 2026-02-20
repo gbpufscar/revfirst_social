@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/* \
 
 COPY alembic.ini ./
 COPY migrations ./migrations
+COPY config ./config
 COPY src ./src
 
 EXPOSE 8000
