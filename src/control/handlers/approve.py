@@ -10,6 +10,7 @@ from src.control.services import (
     get_queue_item,
     mark_queue_item_approved,
     mark_queue_item_failed,
+    mark_queue_item_publishing,
     mark_queue_item_published,
     mark_queue_item_rejected,
     parse_queue_metadata,
@@ -83,71 +84,25 @@ def handle(context: "CommandContext") -> ControlResponse:
                 "published_post_id": item.published_post_id,
             },
         )
-
-    mark_queue_item_approved(
-        context.session,
-        item=item,
-        approved_by_user_id=context.actor.user_id,
-    )
+    if item.status == "publishing":
+        return ControlResponse(
+            success=True,
+            message="approve_in_progress",
+            data={
+                "queue_id": queue_id,
+                "status": item.status,
+            },
+        )
 
     metadata = parse_queue_metadata(item)
-    if item.item_type == "reply":
-        in_reply_to_tweet_id = str(metadata.get("in_reply_to_tweet_id") or "").strip()
-        if not in_reply_to_tweet_id:
-            mark_queue_item_failed(context.session, item=item, error_message="missing_reply_target")
-            return ControlResponse(
-                success=False,
-                message="missing_reply_target",
-                data={"queue_id": queue_id, "status": "failed"},
-            )
-
-        result = publish_reply(
-            context.session,
-            workspace_id=workspace_id,
-            text=item.content_text,
-            in_reply_to_tweet_id=in_reply_to_tweet_id,
-            thread_id=(str(metadata.get("thread_id")) if metadata.get("thread_id") else None),
-            target_author_id=(str(metadata.get("target_author_id")) if metadata.get("target_author_id") else None),
-            x_client=context.x_client,
-        )
-    elif item.item_type == "post":
-        result = publish_post(
-            context.session,
-            workspace_id=workspace_id,
-            text=item.content_text,
-            x_client=context.x_client,
-        )
-    elif item.item_type == "email":
-        recipients_raw = metadata.get("recipients")
-        recipients = []
-        if isinstance(recipients_raw, str):
-            recipients = [value.strip() for value in recipients_raw.split(",") if value.strip()]
-        elif isinstance(recipients_raw, list):
-            recipients = [str(value).strip() for value in recipients_raw if str(value).strip()]
-
-        result = publish_email(
-            context.session,
-            workspace_id=workspace_id,
-            subject=str(metadata.get("subject") or "RevFirst update"),
-            body=item.content_text,
-            recipients=recipients,
-            source_kind=item.source_kind,
-            source_ref_id=item.source_ref_id,
-        )
-    elif item.item_type == "blog":
-        image_url = str(metadata.get("image_url") or "").strip()
-        result = publish_blog(
-            context.session,
-            workspace_id=workspace_id,
-            title=str(metadata.get("title") or "RevFirst blog draft"),
-            markdown=item.content_text,
-            image_url=(image_url or None),
-            source_kind=item.source_kind,
-            source_ref_id=item.source_ref_id,
-        )
-    elif item.item_type == "instagram":
+    if item.item_type == "instagram":
         scheduled_for = _parse_scheduled_for(metadata)
         if scheduled_for is not None and scheduled_for > datetime.now(timezone.utc):
+            mark_queue_item_approved(
+                context.session,
+                item=item,
+                approved_by_user_id=context.actor.user_id,
+            )
             return ControlResponse(
                 success=True,
                 message="approved_scheduled",
@@ -157,25 +112,100 @@ def handle(context: "CommandContext") -> ControlResponse:
                     "scheduled_for": scheduled_for.isoformat(),
                 },
             )
-
-        image_url = str(
-            metadata.get("image_url") or metadata.get("media_url") or metadata.get("asset_url") or ""
-        ).strip()
-        result = publish_instagram(
-            context.session,
-            workspace_id=workspace_id,
-            caption=item.content_text,
-            image_url=(image_url or None),
-            source_kind=item.source_kind,
-            source_ref_id=item.source_ref_id,
-            scheduled_for=(scheduled_for.isoformat() if scheduled_for is not None else None),
-        )
-    else:
+    elif item.item_type not in {"reply", "post", "email", "blog", "instagram"}:
         mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")
         return ControlResponse(
             success=False,
             message="unsupported_queue_item_type",
             data={"queue_id": queue_id, "status": "failed"},
+        )
+
+    mark_queue_item_publishing(
+        context.session,
+        item=item,
+        approved_by_user_id=context.actor.user_id,
+    )
+
+    try:
+        if item.item_type == "reply":
+            in_reply_to_tweet_id = str(metadata.get("in_reply_to_tweet_id") or "").strip()
+            if not in_reply_to_tweet_id:
+                mark_queue_item_failed(context.session, item=item, error_message="missing_reply_target")
+                return ControlResponse(
+                    success=False,
+                    message="missing_reply_target",
+                    data={"queue_id": queue_id, "status": "failed"},
+                )
+
+            result = publish_reply(
+                context.session,
+                workspace_id=workspace_id,
+                text=item.content_text,
+                in_reply_to_tweet_id=in_reply_to_tweet_id,
+                thread_id=(str(metadata.get("thread_id")) if metadata.get("thread_id") else None),
+                target_author_id=(str(metadata.get("target_author_id")) if metadata.get("target_author_id") else None),
+                x_client=context.x_client,
+            )
+        elif item.item_type == "post":
+            result = publish_post(
+                context.session,
+                workspace_id=workspace_id,
+                text=item.content_text,
+                x_client=context.x_client,
+            )
+        elif item.item_type == "email":
+            recipients_raw = metadata.get("recipients")
+            recipients = []
+            if isinstance(recipients_raw, str):
+                recipients = [value.strip() for value in recipients_raw.split(",") if value.strip()]
+            elif isinstance(recipients_raw, list):
+                recipients = [str(value).strip() for value in recipients_raw if str(value).strip()]
+
+            result = publish_email(
+                context.session,
+                workspace_id=workspace_id,
+                subject=str(metadata.get("subject") or "RevFirst update"),
+                body=item.content_text,
+                recipients=recipients,
+                source_kind=item.source_kind,
+                source_ref_id=item.source_ref_id,
+            )
+        elif item.item_type == "blog":
+            image_url = str(metadata.get("image_url") or "").strip()
+            result = publish_blog(
+                context.session,
+                workspace_id=workspace_id,
+                title=str(metadata.get("title") or "RevFirst blog draft"),
+                markdown=item.content_text,
+                image_url=(image_url or None),
+                source_kind=item.source_kind,
+                source_ref_id=item.source_ref_id,
+            )
+        else:
+            scheduled_for = _parse_scheduled_for(metadata)
+            image_url = str(
+                metadata.get("image_url") or metadata.get("media_url") or metadata.get("asset_url") or ""
+            ).strip()
+            result = publish_instagram(
+                context.session,
+                workspace_id=workspace_id,
+                caption=item.content_text,
+                image_url=(image_url or None),
+                source_kind=item.source_kind,
+                source_ref_id=item.source_ref_id,
+                scheduled_for=(scheduled_for.isoformat() if scheduled_for is not None else None),
+            )
+    except Exception:
+        mark_queue_item_failed(context.session, item=item, error_message="unexpected_publish_error")
+        return ControlResponse(
+            success=False,
+            message="approve_publish_failed",
+            data={
+                "queue_id": queue_id,
+                "status": "failed",
+                "publish_status": "failed",
+                "error": "unexpected_publish_error",
+            },
         )
 
     if result.published:

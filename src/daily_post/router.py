@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import secrets
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.auth.dependencies import require_workspace_role
@@ -28,12 +31,39 @@ def _enforce_workspace_scope(auth: AuthContext, workspace_id: str) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Token workspace scope mismatch")
 
 
+def _enforce_auto_publish_guard(auth: AuthContext, internal_publish_key: Optional[str]) -> None:
+    if auth.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+
+    settings = get_settings()
+    if not settings.publishing_direct_api_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="direct_publish_api_disabled",
+        )
+
+    expected = settings.publishing_direct_api_internal_key.strip()
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="direct_publish_api_misconfigured",
+        )
+
+    received = (internal_publish_key or "").strip()
+    if not received or not secrets.compare_digest(received, expected):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="invalid_internal_publish_key",
+        )
+
+
 @router.post("/generate", response_model=DailyPostGenerateResponse)
 def generate_daily_post_endpoint(
     payload: DailyPostGenerateRequest,
     auth: AuthContext = Depends(require_workspace_role("owner", "admin", "member")),
     session: Session = Depends(get_session),
     x_client: XClient = Depends(get_x_client),
+    internal_publish_key: Optional[str] = Header(default=None, alias="X-RevFirst-Internal-Key"),
 ) -> DailyPostGenerateResponse:
     _enforce_workspace_scope(auth, payload.workspace_id)
     set_workspace_context(session, payload.workspace_id)
@@ -42,6 +72,8 @@ def generate_daily_post_endpoint(
     auto_publish = payload.auto_publish
     if auto_publish is None:
         auto_publish = settings.daily_post_auto_publish_default
+    if auto_publish:
+        _enforce_auto_publish_guard(auth, internal_publish_key)
 
     result = generate_daily_post(
         session,

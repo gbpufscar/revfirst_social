@@ -284,6 +284,23 @@ def mark_queue_item_approved(
     return item
 
 
+def mark_queue_item_publishing(
+    session: Session,
+    *,
+    item: ApprovalQueueItem,
+    approved_by_user_id: Optional[str] = None,
+) -> ApprovalQueueItem:
+    now = datetime.now(timezone.utc)
+    item.status = "publishing"
+    if approved_by_user_id:
+        item.approved_by_user_id = approved_by_user_id
+    if item.approved_at is None:
+        item.approved_at = now
+    item.updated_at = now
+    session.commit()
+    return item
+
+
 def mark_queue_item_published(
     session: Session,
     *,

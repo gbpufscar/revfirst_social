@@ -30,9 +30,17 @@ class Settings(BaseSettings):
     x_client_secret: str = ""
     x_redirect_uri: str = ""
     x_token_url: str = "https://api.twitter.com/2/oauth2/token"
+    x_authorize_url: str = "https://twitter.com/i/oauth2/authorize"
     x_search_url: str = "https://api.twitter.com/2/tweets/search/recent"
     x_publish_url: str = "https://api.twitter.com/2/tweets"
+    x_users_me_url: str = "https://api.twitter.com/2/users/me"
     x_api_timeout_seconds: int = 20
+    x_oauth_state_ttl_seconds: int = 600
+    x_oauth_default_scopes: str = "tweet.read tweet.write users.read offline.access"
+    x_required_publish_scope: str = "tweet.write"
+    x_auto_refresh_enabled: bool = True
+    x_refresh_skew_seconds: int = 300
+    x_refresh_lock_ttl_seconds: int = 30
     email_api_key: str = ""
     email_api_base_url: str = "https://api.resend.com"
     email_api_timeout_seconds: int = 20
@@ -65,6 +73,8 @@ class Settings(BaseSettings):
     publish_thread_cooldown_minutes: int = 45
     publish_author_cooldown_minutes: int = 30
     publish_max_text_chars: int = 280
+    publishing_direct_api_enabled: bool = False
+    publishing_direct_api_internal_key: str = ""
     scheduler_workspace_lock_ttl_seconds: int = 300
     scheduler_max_workspaces_per_run: int = 50
     scheduler_candidate_evaluation_limit: int = 5
@@ -91,8 +101,27 @@ class Settings(BaseSettings):
 
 
 def _validate(settings: Settings) -> Settings:
-    if settings.env.lower() in {"prod", "production"} and not settings.secret_key:
-        raise ValueError("SECRET_KEY is required when ENV=production.")
+    is_production = settings.env.lower() in {"prod", "production"}
+    if is_production:
+        required_production_values = {
+            "SECRET_KEY": settings.secret_key,
+            "TOKEN_ENCRYPTION_KEY": settings.token_encryption_key,
+            "DATABASE_URL": settings.database_url,
+            "REDIS_URL": settings.redis_url,
+            "X_CLIENT_ID": settings.x_client_id,
+            "X_CLIENT_SECRET": settings.x_client_secret,
+            "X_REDIRECT_URI": settings.x_redirect_uri,
+            "TELEGRAM_WEBHOOK_SECRET": settings.telegram_webhook_secret,
+            "TELEGRAM_ADMINS_FILE_PATH": settings.telegram_admins_file_path,
+            "APP_PUBLIC_BASE_URL": settings.app_public_base_url,
+            "PUBLISHING_DIRECT_API_INTERNAL_KEY": settings.publishing_direct_api_internal_key,
+        }
+        missing = [name for name, value in required_production_values.items() if not str(value).strip()]
+        if missing:
+            joined = ", ".join(sorted(missing))
+            raise ValueError(f"Missing required production secrets/config: {joined}.")
+        if settings.publishing_direct_api_enabled:
+            raise ValueError("PUBLISHING_DIRECT_API_ENABLED must be false in production.")
     if settings.sentry_traces_sample_rate < 0 or settings.sentry_traces_sample_rate > 1:
         raise ValueError("SENTRY_TRACES_SAMPLE_RATE must be between 0 and 1.")
     if settings.ip_rate_limit_requests_per_window <= 0:
@@ -103,6 +132,16 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("INSTAGRAM_DEFAULT_SCHEDULE_HOURS_AHEAD must be zero or positive.")
     if settings.image_provider.strip().lower() not in {"mock", "webhook", "gemini"}:
         raise ValueError("IMAGE_PROVIDER must be one of: mock, webhook, gemini.")
+    if settings.x_refresh_skew_seconds < 0:
+        raise ValueError("X_REFRESH_SKEW_SECONDS must be zero or positive.")
+    if settings.x_refresh_lock_ttl_seconds <= 0:
+        raise ValueError("X_REFRESH_LOCK_TTL_SECONDS must be positive.")
+    if settings.x_oauth_state_ttl_seconds <= 0:
+        raise ValueError("X_OAUTH_STATE_TTL_SECONDS must be positive.")
+    if not settings.x_required_publish_scope.strip():
+        raise ValueError("X_REQUIRED_PUBLISH_SCOPE must not be empty.")
+    if settings.publishing_direct_api_enabled and not settings.publishing_direct_api_internal_key.strip():
+        raise ValueError("PUBLISHING_DIRECT_API_INTERNAL_KEY is required when PUBLISHING_DIRECT_API_ENABLED=true.")
     return settings
 
 

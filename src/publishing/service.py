@@ -274,7 +274,6 @@ def publish_reply(
             error_message=f"Author cooldown active until {blocked_author_until.isoformat()}",
         )
         session.commit()
-        record_replies_published(workspace_id=workspace_id)
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -342,6 +341,7 @@ def publish_reply(
             )
         )
         session.commit()
+        record_replies_published(workspace_id=workspace_id)
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -364,6 +364,30 @@ def publish_reply(
             target_thread_id=thread_id,
             target_author_id=target_author_id,
             error_message=str(exc),
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=False,
+            external_post_id=None,
+            status="failed",
+            message="X publish failed",
+        )
+    except Exception:
+        session.rollback()
+        record_publish_error(workspace_id=workspace_id, channel="x")
+        _create_audit_log(
+            session,
+            platform="x",
+            workspace_id=workspace_id,
+            action=action,
+            text=text,
+            status="failed",
+            in_reply_to_tweet_id=in_reply_to_tweet_id,
+            target_thread_id=thread_id,
+            target_author_id=target_author_id,
+            error_message="unexpected_publish_error",
         )
         session.commit()
         return PublishResult(
@@ -484,6 +508,27 @@ def publish_post(
             text=text,
             status="failed",
             error_message=str(exc),
+        )
+        session.commit()
+        return PublishResult(
+            workspace_id=workspace_id,
+            action=action,
+            published=False,
+            external_post_id=None,
+            status="failed",
+            message="X publish failed",
+        )
+    except Exception:
+        session.rollback()
+        record_publish_error(workspace_id=workspace_id, channel="x")
+        _create_audit_log(
+            session,
+            platform="x",
+            workspace_id=workspace_id,
+            action=action,
+            text=text,
+            status="failed",
+            error_message="unexpected_publish_error",
         )
         session.commit()
         return PublishResult(
