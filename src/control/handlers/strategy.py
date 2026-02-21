@@ -6,7 +6,11 @@ from typing import TYPE_CHECKING
 
 from src.control.command_schema import ControlResponse
 from src.strategy.x_growth_strategy_agent import (
+    approve_strategy_candidate,
+    list_pending_strategy_candidates,
     latest_workspace_strategy_report,
+    reject_strategy_candidate,
+    run_workspace_strategy_discovery,
     run_workspace_strategy_scan,
     upsert_watchlist_account,
 )
@@ -73,3 +77,82 @@ def handle_report(context: "CommandContext") -> ControlResponse:
         return ControlResponse(success=False, message="strategy_report_empty", data=report)
     return ControlResponse(success=True, message="strategy_report_ok", data=report)
 
+
+def handle_discover(context: "CommandContext") -> ControlResponse:
+    workspace_id = context.envelope.workspace_id
+    args = list(context.command.args)
+    if not args or args[0].lower() in {"run", "scan"}:
+        result = run_workspace_strategy_discovery(
+            context.session,
+            workspace_id=workspace_id,
+            x_client=context.x_client,
+        )
+        if result.get("status") in {"missing_x_oauth", "search_failed"}:
+            return ControlResponse(success=False, message="strategy_discovery_not_ready", data=result)
+        return ControlResponse(success=True, message="strategy_discovery_ok", data=result)
+
+    subcommand = args[0].lower()
+    if subcommand in {"queue", "list"}:
+        rows = list_pending_strategy_candidates(
+            context.session,
+            workspace_id=workspace_id,
+            limit=10,
+        )
+        items = [
+            {
+                "candidate_id": row.id,
+                "account_user_id": row.account_user_id,
+                "account_username": row.account_username,
+                "score": row.score,
+                "followers_count": row.followers_count,
+                "signal_post_count": row.signal_post_count,
+                "status": row.status,
+                "discovered_at": row.discovered_at.isoformat(),
+            }
+            for row in rows
+        ]
+        message = "strategy_candidates_queue" if items else "strategy_candidates_queue_empty"
+        return ControlResponse(
+            success=True,
+            message=message,
+            data={
+                "workspace_id": workspace_id,
+                "count": len(items),
+                "items": items,
+            },
+        )
+
+    if subcommand in {"approve", "reject"}:
+        if len(args) < 2 or not str(args[1]).strip():
+            return ControlResponse(success=False, message="strategy_candidate_missing_id", data={})
+        candidate_id = str(args[1]).strip()
+        if subcommand == "approve":
+            approved = approve_strategy_candidate(
+                context.session,
+                workspace_id=workspace_id,
+                candidate_id=candidate_id,
+                reviewed_by_user_id=context.actor.user_id,
+            )
+            if approved is None:
+                return ControlResponse(
+                    success=False,
+                    message="strategy_candidate_not_found",
+                    data={"candidate_id": candidate_id},
+                )
+            return ControlResponse(success=True, message="strategy_candidate_approved", data=approved)
+
+        rejected = reject_strategy_candidate(
+            context.session,
+            workspace_id=workspace_id,
+            candidate_id=candidate_id,
+            reviewed_by_user_id=context.actor.user_id,
+        )
+        if rejected is None:
+            return ControlResponse(
+                success=False,
+                message="strategy_candidate_not_found",
+                data={"candidate_id": candidate_id},
+            )
+        return ControlResponse(success=True, message="strategy_candidate_rejected", data=rejected)
+
+    return ControlResponse(success=False, message="strategy_discovery_invalid_args", data={"args": args})

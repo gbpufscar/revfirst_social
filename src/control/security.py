@@ -60,6 +60,7 @@ COMMAND_ROLE_MATRIX: Dict[str, Set[str]] = {
     "limit": {"owner", "admin"},
     "seed": {"owner", "admin", "member"},
     "strategy_scan": {"owner", "admin"},
+    "strategy_discover": {"owner", "admin"},
 }
 
 
