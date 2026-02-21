@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from sqlalchemy import select
 
 import src.channels.blog.publisher as blog_publisher_module
@@ -651,5 +652,80 @@ def test_reject_auto_regeneration_respects_daily_cap(monkeypatch, tmp_path) -> N
         assert payload["message"] == "queue_item_rejected"
         assert payload["data"]["auto_regeneration"]["triggered"] is False
         assert payload["data"]["auto_regeneration"]["reason"] == "regen_cap_reached"
+    finally:
+        teardown_control_test_context()
+
+
+def test_reject_regeneration_generates_image_when_preview_missing(monkeypatch, tmp_path) -> None:
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        class _FakeDailyPostResult:
+            status = "ready"
+            draft_id = "regen-draft-no-image"
+            text = "Replacement founder post without preview image."
+            channel_targets = ["x"]
+            channel_previews = {"x": {"metadata": {}}}
+
+        class _FakeMediaResult:
+            success = True
+            public_url = "https://cdn.revfirst.cloud/regen-generated.jpg"
+            asset_id = "asset-regen-generated"
+
+        monkeypatch.setattr(
+            approve_handler_module,
+            "generate_daily_post",
+            lambda session, *, workspace_id, topic, auto_publish, x_client: _FakeDailyPostResult(),  # noqa: ARG005
+        )
+        monkeypatch.setattr(
+            approve_handler_module,
+            "generate_image_asset",
+            lambda session, **kwargs: _FakeMediaResult(),  # noqa: ARG005
+        )
+
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="post",
+                content_text="Original rejected post without image.",
+                source_kind="daily_post_draft",
+                source_ref_id="daily-draft-no-image",
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key="test-reject-regen-no-image-1",
+                metadata={"draft_id": "daily-draft-no-image"},
+            )
+            queue_id = queue_item.id
+
+        reject_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 4993,
+                "message": {
+                    "message_id": 9953,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/reject {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert reject_response.status_code == 200
+        payload = reject_response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "queue_item_rejected_regenerated"
+        assert payload["data"]["auto_regeneration"]["triggered"] is True
+
+        with context.session_factory() as session:
+            generated_item = session.scalar(
+                select(ApprovalQueueItem).where(
+                    ApprovalQueueItem.workspace_id == context.workspace_id,
+                    ApprovalQueueItem.source_ref_id == "regen-draft-no-image",
+                )
+            )
+            assert generated_item is not None
+            metadata = json.loads(generated_item.metadata_json)
+            assert metadata["image_url"] == "https://cdn.revfirst.cloud/regen-generated.jpg"
+            assert metadata["media_asset_id"] == "asset-regen-generated"
     finally:
         teardown_control_test_context()

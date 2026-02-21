@@ -28,6 +28,7 @@ from src.editorial.queue_states import (
     PENDING_REVIEW_STATUSES,
     QUEUE_STATUS_APPROVED_SCHEDULED,
 )
+from src.media.service import generate_image_asset
 from src.storage.models import ApprovalQueueItem, WorkspaceEvent
 
 if TYPE_CHECKING:
@@ -330,6 +331,22 @@ def _attempt_auto_regeneration(context: "CommandContext", *, rejected_item: Appr
         preview_metadata = preview.get("metadata") if isinstance(preview, dict) else {}
         metadata = preview_metadata if isinstance(preview_metadata, dict) else {}
         image_url = str(metadata.get("image_url") or "").strip() or None
+        media_asset_id = str(metadata.get("media_asset_id") or "").strip() or None
+
+        if not image_url:
+            media_result = generate_image_asset(
+                context.session,
+                workspace_id=context.envelope.workspace_id,
+                channel="x",
+                content_text=generated.text,
+                source_kind="daily_post_draft",
+                source_ref_id=generated.draft_id,
+                idempotency_key=f"daily_post_media:x:{generated.draft_id}",
+                metadata={"draft_id": generated.draft_id, "content_type": "short_post"},
+            )
+            if media_result.success and media_result.public_url:
+                image_url = media_result.public_url
+                media_asset_id = media_result.asset_id
 
         queue_item = create_queue_item(
             context.session,
@@ -344,6 +361,7 @@ def _attempt_auto_regeneration(context: "CommandContext", *, rejected_item: Appr
             metadata={
                 "draft_id": generated.draft_id,
                 "image_url": image_url,
+                "media_asset_id": media_asset_id,
                 "regenerated_from_queue_id": rejected_item.id,
             },
         )
