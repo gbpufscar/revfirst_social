@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from sqlalchemy import select
 
 import src.channels.instagram.publisher as instagram_publisher_module
 import src.control.telegram_bot as control_bot_module
+import src.control.handlers.strategy as strategy_handler_module
 from src.control.services import create_queue_item
 from src.storage.models import ApprovalQueueItem, PipelineRun
 from tests.control.conftest import create_control_test_context, teardown_control_test_context
@@ -122,6 +124,119 @@ def test_control_router_returns_unknown_command(monkeypatch, tmp_path) -> None:
         payload = response.json()
         assert payload["accepted"] is False
         assert payload["message"] == "unknown_command"
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_strategy_discover_run(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        strategy_handler_module,
+        "run_workspace_strategy_discovery",
+        lambda session, *, workspace_id, x_client: {  # noqa: ARG005
+            "workspace_id": workspace_id,
+            "status": "discovered",
+            "scanned_users": 4,
+            "discovered": 2,
+            "updated": 1,
+            "pending_count": 2,
+            "candidates": [],
+            "errors": [],
+        },
+    )
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 21011,
+                "message": {
+                    "message_id": 801,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/strategy_discover run",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "strategy_discovery_ok"
+        assert payload["data"]["pending_count"] == 2
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_strategy_discover_queue_and_approve(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        strategy_handler_module,
+        "list_pending_strategy_candidates",
+        lambda session, *, workspace_id, limit=10: [  # noqa: ARG005
+            SimpleNamespace(
+                id="cand-123",
+                account_user_id="954379895022473223",
+                account_username="Tobby_scraper",
+                score=78,
+                followers_count=1200,
+                signal_post_count=3,
+                status="pending",
+                discovered_at=datetime(2026, 2, 21, 0, 0, tzinfo=timezone.utc),
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        strategy_handler_module,
+        "approve_strategy_candidate",
+        lambda session, *, workspace_id, candidate_id, reviewed_by_user_id: {  # noqa: ARG005
+            "candidate_id": candidate_id,
+            "account_user_id": "954379895022473223",
+            "account_username": "Tobby_scraper",
+            "status": "approved",
+            "watchlist_status": "active",
+        },
+    )
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        queue_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 21012,
+                "message": {
+                    "message_id": 802,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/strategy_discover queue",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert queue_response.status_code == 200
+        queue_payload = queue_response.json()
+        assert queue_payload["accepted"] is True
+        assert queue_payload["message"] == "strategy_candidates_queue"
+        assert queue_payload["data"]["count"] == 1
+        assert queue_payload["data"]["items"][0]["candidate_id"] == "cand-123"
+
+        approve_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 21013,
+                "message": {
+                    "message_id": 803,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/strategy_discover approve cand-123",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert approve_response.status_code == 200
+        approve_payload = approve_response.json()
+        assert approve_payload["accepted"] is True
+        assert approve_payload["message"] == "strategy_candidate_approved"
+        assert approve_payload["data"]["candidate_id"] == "cand-123"
     finally:
         teardown_control_test_context()
 

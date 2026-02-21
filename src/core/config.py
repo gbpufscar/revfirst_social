@@ -73,6 +73,14 @@ class Settings(BaseSettings):
         "\"drop your saas\" OR \"share your startup\" OR \"what are you building\" "
         "OR \"show your product\" lang:en -is:retweet"
     )
+    x_strategy_discovery_query: str = (
+        "\"building in public\" OR \"just launched\" OR \"we hit\" OR \"SaaS\" "
+        "lang:en -is:retweet -is:reply"
+    )
+    x_strategy_discovery_max_results: int = 30
+    x_strategy_discovery_max_candidates: int = 8
+    x_strategy_candidate_min_followers: int = 100
+    x_strategy_candidate_max_followers: int = 200000
     publish_thread_cooldown_minutes: int = 45
     publish_author_cooldown_minutes: int = 30
     publish_max_text_chars: int = 280
@@ -88,6 +96,8 @@ class Settings(BaseSettings):
     scheduler_growth_collection_interval_hours: int = 24
     scheduler_strategy_scan_enabled: bool = True
     scheduler_strategy_scan_interval_hours: int = 168
+    scheduler_strategy_discovery_enabled: bool = True
+    scheduler_strategy_discovery_interval_hours: int = 24
     telegram_webhook_secret: str = ""
     telegram_bot_token: str = ""
     telegram_seed_max_text_chars: int = 1200
@@ -161,6 +171,18 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("SCHEDULER_GROWTH_COLLECTION_INTERVAL_HOURS must be positive.")
     if settings.scheduler_strategy_scan_interval_hours <= 0:
         raise ValueError("SCHEDULER_STRATEGY_SCAN_INTERVAL_HOURS must be positive.")
+    if settings.scheduler_strategy_discovery_interval_hours <= 0:
+        raise ValueError("SCHEDULER_STRATEGY_DISCOVERY_INTERVAL_HOURS must be positive.")
+    if settings.x_strategy_discovery_max_results <= 0:
+        raise ValueError("X_STRATEGY_DISCOVERY_MAX_RESULTS must be positive.")
+    if settings.x_strategy_discovery_max_candidates <= 0:
+        raise ValueError("X_STRATEGY_DISCOVERY_MAX_CANDIDATES must be positive.")
+    if settings.x_strategy_candidate_min_followers < 0:
+        raise ValueError("X_STRATEGY_CANDIDATE_MIN_FOLLOWERS must be zero or positive.")
+    if settings.x_strategy_candidate_max_followers <= 0:
+        raise ValueError("X_STRATEGY_CANDIDATE_MAX_FOLLOWERS must be positive.")
+    if settings.x_strategy_candidate_max_followers < settings.x_strategy_candidate_min_followers:
+        raise ValueError("X_STRATEGY_CANDIDATE_MAX_FOLLOWERS must be >= X_STRATEGY_CANDIDATE_MIN_FOLLOWERS.")
     return settings
 
 

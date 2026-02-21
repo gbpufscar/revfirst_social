@@ -71,7 +71,7 @@ def parse_command(text: str) -> Optional[ControlCommand]:
         args = remainder.split() if remainder else []
         return ControlCommand(name=command_name, args=args, raw_text=stripped)
 
-    if command_name in {"approve", "reject", "preview", "run", "channel", "limit", "strategy_scan"}:
+    if command_name in {"approve", "reject", "preview", "run", "channel", "limit", "strategy_scan", "strategy_discover"}:
         args = remainder.split() if remainder else []
         return ControlCommand(name=command_name, args=args, raw_text=stripped)
 

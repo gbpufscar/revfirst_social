@@ -75,6 +75,41 @@ def test_rejects_invalid_scheduler_intervals(monkeypatch) -> None:
     with pytest.raises(ValueError, match="SCHEDULER_STRATEGY_SCAN_INTERVAL_HOURS"):
         get_settings()
 
+    monkeypatch.setenv("SCHEDULER_STRATEGY_SCAN_INTERVAL_HOURS", "24")
+    monkeypatch.setenv("SCHEDULER_STRATEGY_DISCOVERY_INTERVAL_HOURS", "0")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="SCHEDULER_STRATEGY_DISCOVERY_INTERVAL_HOURS"):
+        get_settings()
+
+    monkeypatch.setenv("SCHEDULER_STRATEGY_DISCOVERY_INTERVAL_HOURS", "24")
+    monkeypatch.setenv("X_STRATEGY_DISCOVERY_MAX_RESULTS", "0")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="X_STRATEGY_DISCOVERY_MAX_RESULTS"):
+        get_settings()
+
+    monkeypatch.setenv("X_STRATEGY_DISCOVERY_MAX_RESULTS", "30")
+    monkeypatch.setenv("X_STRATEGY_DISCOVERY_MAX_CANDIDATES", "0")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="X_STRATEGY_DISCOVERY_MAX_CANDIDATES"):
+        get_settings()
+
+    monkeypatch.setenv("X_STRATEGY_DISCOVERY_MAX_CANDIDATES", "10")
+    monkeypatch.setenv("X_STRATEGY_CANDIDATE_MIN_FOLLOWERS", "-1")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="X_STRATEGY_CANDIDATE_MIN_FOLLOWERS"):
+        get_settings()
+
+    monkeypatch.setenv("X_STRATEGY_CANDIDATE_MIN_FOLLOWERS", "100")
+    monkeypatch.setenv("X_STRATEGY_CANDIDATE_MAX_FOLLOWERS", "50")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="X_STRATEGY_CANDIDATE_MAX_FOLLOWERS"):
+        get_settings()
+
     get_settings.cache_clear()
 
 

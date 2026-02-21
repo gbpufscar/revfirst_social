@@ -11,11 +11,13 @@ import uuid
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
+from src.core.config import get_settings
 from src.integrations.x.service import get_workspace_x_access_token
 from src.integrations.x.x_client import XClient
 from src.storage.models import (
     WorkspaceEvent,
     XCompetitorPost,
+    XStrategyDiscoveryCandidate,
     XStrategyPattern,
     XStrategyRecommendation,
     XStrategyWatchlist,
@@ -49,10 +51,104 @@ def _as_int(value: Any) -> int:
     return 0
 
 
+def _as_float(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return 0.0
+        try:
+            return float(stripped)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
 def _normalize_dt(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _score_discovery_candidate(
+    *,
+    followers_count: int,
+    avg_engagement: float,
+    cadence_per_day: float,
+    signal_posts: int,
+    min_followers: int,
+    max_followers: int,
+) -> tuple[int, Dict[str, Any]]:
+    follower_band_points = 0
+    if followers_count >= min_followers and followers_count <= max_followers:
+        follower_band_points = 30
+    elif followers_count > max_followers:
+        follower_band_points = 10
+    elif followers_count >= max(1, int(min_followers * 0.5)):
+        follower_band_points = 15
+
+    engagement_points = min(30, int(avg_engagement * 2))
+    cadence_points = min(20, int(cadence_per_day * 20))
+    signal_points = min(20, signal_posts * 5)
+    score = min(100, follower_band_points + engagement_points + cadence_points + signal_points)
+
+    rationale = {
+        "follower_band_points": follower_band_points,
+        "engagement_points": engagement_points,
+        "cadence_points": cadence_points,
+        "signal_points": signal_points,
+        "followers_count": followers_count,
+        "avg_engagement": round(avg_engagement, 2),
+        "cadence_per_day": round(cadence_per_day, 2),
+        "signal_posts": signal_posts,
+        "score": score,
+    }
+    return score, rationale
+
+
+def _calculate_recent_post_stats(posts: list[Dict[str, Any]]) -> Dict[str, Any]:
+    if not posts:
+        return {"avg_engagement": 0.0, "cadence_per_day": 0.0, "post_count": 0}
+
+    engagement_samples: list[float] = []
+    timestamps: list[datetime] = []
+    for payload in posts:
+        metrics = payload.get("public_metrics")
+        if not isinstance(metrics, dict):
+            metrics = {}
+        engagement = float(
+            _as_int(metrics.get("like_count"))
+            + _as_int(metrics.get("reply_count"))
+            + _as_int(metrics.get("retweet_count") or metrics.get("repost_count"))
+            + _as_int(metrics.get("quote_count"))
+        )
+        engagement_samples.append(engagement)
+
+        created_at = payload.get("created_at")
+        if isinstance(created_at, str) and created_at.strip():
+            try:
+                timestamps.append(datetime.fromisoformat(created_at.replace("Z", "+00:00")))
+            except ValueError:
+                continue
+
+    avg_engagement = round(sum(engagement_samples) / len(engagement_samples), 2) if engagement_samples else 0.0
+    cadence_per_day = 0.0
+    if len(timestamps) >= 2:
+        min_dt = _normalize_dt(min(timestamps))
+        max_dt = _normalize_dt(max(timestamps))
+        window_days = max((max_dt - min_dt).total_seconds() / 86400.0, 1.0)
+        cadence_per_day = round(len(timestamps) / window_days, 2)
+    elif len(timestamps) == 1:
+        cadence_per_day = 1.0
+
+    return {
+        "avg_engagement": avg_engagement,
+        "cadence_per_day": cadence_per_day,
+        "post_count": len(posts),
+    }
 
 
 def upsert_watchlist_account(
@@ -107,6 +203,366 @@ def list_watchlist_accounts(session: Session, *, workspace_id: str, status: str 
             .order_by(desc(XStrategyWatchlist.added_at))
         ).all()
     )
+
+
+def _upsert_discovery_candidate(
+    session: Session,
+    *,
+    workspace_id: str,
+    account_user_id: str,
+    account_username: Optional[str],
+    source_query: str,
+    signal_post_count: int,
+    followers_count: Optional[int],
+    tweet_count: Optional[int],
+    avg_engagement: float,
+    cadence_per_day: float,
+    score: int,
+    rationale: Dict[str, Any],
+) -> tuple[XStrategyDiscoveryCandidate, bool]:
+    existing = session.scalar(
+        select(XStrategyDiscoveryCandidate).where(
+            XStrategyDiscoveryCandidate.workspace_id == workspace_id,
+            XStrategyDiscoveryCandidate.account_user_id == account_user_id,
+        )
+    )
+    if existing is None:
+        row = XStrategyDiscoveryCandidate(
+            id=str(uuid.uuid4()),
+            workspace_id=workspace_id,
+            account_user_id=account_user_id,
+            account_username=account_username,
+            source_query=source_query,
+            signal_post_count=signal_post_count,
+            followers_count=followers_count,
+            tweet_count=tweet_count,
+            avg_engagement=avg_engagement,
+            cadence_per_day=cadence_per_day,
+            score=score,
+            rationale_json=_json_dumps(rationale),
+            status="pending",
+        )
+        session.add(row)
+        return row, True
+
+    existing.account_username = account_username or existing.account_username
+    existing.source_query = source_query
+    existing.signal_post_count = signal_post_count
+    existing.followers_count = followers_count
+    existing.tweet_count = tweet_count
+    existing.avg_engagement = avg_engagement
+    existing.cadence_per_day = cadence_per_day
+    existing.score = score
+    existing.rationale_json = _json_dumps(rationale)
+    existing.discovered_at = datetime.now(timezone.utc)
+    existing.updated_at = datetime.now(timezone.utc)
+    return existing, False
+
+
+def list_pending_strategy_candidates(
+    session: Session,
+    *,
+    workspace_id: str,
+    limit: int = 10,
+) -> list[XStrategyDiscoveryCandidate]:
+    return list(
+        session.scalars(
+            select(XStrategyDiscoveryCandidate)
+            .where(
+                XStrategyDiscoveryCandidate.workspace_id == workspace_id,
+                XStrategyDiscoveryCandidate.status == "pending",
+            )
+            .order_by(
+                XStrategyDiscoveryCandidate.score.desc(),
+                XStrategyDiscoveryCandidate.discovered_at.desc(),
+            )
+            .limit(max(1, limit))
+        ).all()
+    )
+
+
+def run_workspace_strategy_discovery(
+    session: Session,
+    *,
+    workspace_id: str,
+    x_client: XClient,
+) -> Dict[str, Any]:
+    settings = get_settings()
+    token = get_workspace_x_access_token(session, workspace_id=workspace_id, x_client=x_client)
+    if token is None:
+        return {
+            "workspace_id": workspace_id,
+            "status": "missing_x_oauth",
+            "pending_count": len(list_pending_strategy_candidates(session, workspace_id=workspace_id, limit=100)),
+            "discovered": 0,
+            "updated": 0,
+            "errors": ["x_oauth_missing_or_expired"],
+        }
+
+    query = settings.x_strategy_discovery_query.strip() or settings.x_default_open_calls_query
+    max_results = max(10, min(settings.x_strategy_discovery_max_results, 100))
+    max_candidates = max(1, min(settings.x_strategy_discovery_max_candidates, 25))
+    min_followers = max(0, settings.x_strategy_candidate_min_followers)
+    max_followers = max(min_followers, settings.x_strategy_candidate_max_followers)
+
+    try:
+        payload = x_client.search_open_calls(
+            access_token=token,
+            query=query,
+            max_results=max_results,
+        )
+    except Exception:
+        return {
+            "workspace_id": workspace_id,
+            "status": "search_failed",
+            "pending_count": len(list_pending_strategy_candidates(session, workspace_id=workspace_id, limit=100)),
+            "discovered": 0,
+            "updated": 0,
+            "errors": ["strategy_discovery_search_failed"],
+        }
+
+    users_raw: list[Dict[str, Any]] = []
+    includes = payload.get("includes")
+    if isinstance(includes, dict):
+        candidate_users = includes.get("users")
+        if isinstance(candidate_users, list):
+            users_raw = [row for row in candidate_users if isinstance(row, dict)]
+
+    signal_posts_by_author: Dict[str, int] = {}
+    data_rows = payload.get("data")
+    if isinstance(data_rows, list):
+        for row in data_rows:
+            if not isinstance(row, dict):
+                continue
+            author_id = str(row.get("author_id") or "").strip()
+            if not author_id:
+                continue
+            signal_posts_by_author[author_id] = signal_posts_by_author.get(author_id, 0) + 1
+
+    active_watchlist = list_watchlist_accounts(session, workspace_id=workspace_id, status="active")
+    active_watchlist_ids = {row.account_user_id for row in active_watchlist}
+
+    discovered = 0
+    updated = 0
+    scanned_users = 0
+    errors: list[str] = []
+    ranked_ids: list[str] = []
+    scored_candidates: list[tuple[int, Dict[str, Any]]] = []
+
+    dedupe_users: Dict[str, Dict[str, Any]] = {}
+    for user in users_raw:
+        user_id = str(user.get("id") or "").strip()
+        if not user_id:
+            continue
+        dedupe_users[user_id] = user
+
+    for user_id, user_payload in dedupe_users.items():
+        if user_id in active_watchlist_ids:
+            continue
+        scanned_users += 1
+        username = str(user_payload.get("username") or "").strip() or None
+
+        try:
+            metrics_payload = x_client.get_user_public_metrics(
+                access_token=token,
+                user_id=user_id,
+            )
+        except Exception:
+            errors.append(f"user_metrics_failed:{user_id}")
+            continue
+
+        metrics = metrics_payload.get("public_metrics")
+        if not isinstance(metrics, dict):
+            metrics = {}
+        followers_count = _as_int(metrics.get("followers_count"))
+        tweet_count = _as_int(metrics.get("tweet_count"))
+        if followers_count < min_followers:
+            continue
+
+        try:
+            posts = x_client.get_user_recent_posts(
+                access_token=token,
+                user_id=user_id,
+                max_results=15,
+            )
+        except Exception:
+            errors.append(f"user_posts_failed:{user_id}")
+            continue
+
+        post_stats = _calculate_recent_post_stats(posts)
+        score, rationale = _score_discovery_candidate(
+            followers_count=followers_count,
+            avg_engagement=_as_float(post_stats.get("avg_engagement")),
+            cadence_per_day=_as_float(post_stats.get("cadence_per_day")),
+            signal_posts=signal_posts_by_author.get(user_id, 0),
+            min_followers=min_followers,
+            max_followers=max_followers,
+        )
+        rationale["signal_post_count"] = signal_posts_by_author.get(user_id, 0)
+        rationale["post_count"] = int(post_stats.get("post_count") or 0)
+
+        row, created = _upsert_discovery_candidate(
+            session,
+            workspace_id=workspace_id,
+            account_user_id=user_id,
+            account_username=username,
+            source_query=query,
+            signal_post_count=signal_posts_by_author.get(user_id, 0),
+            followers_count=followers_count,
+            tweet_count=tweet_count,
+            avg_engagement=_as_float(post_stats.get("avg_engagement")),
+            cadence_per_day=_as_float(post_stats.get("cadence_per_day")),
+            score=score,
+            rationale=rationale,
+        )
+        if row.status == "pending":
+            scored_candidates.append(
+                (
+                    row.score,
+                    {
+                        "candidate_id": row.id,
+                        "account_user_id": row.account_user_id,
+                        "account_username": row.account_username,
+                        "score": row.score,
+                        "followers_count": row.followers_count,
+                        "signal_post_count": row.signal_post_count,
+                    },
+                )
+            )
+        if created:
+            discovered += 1
+        else:
+            updated += 1
+
+    scored_candidates.sort(key=lambda item: item[0], reverse=True)
+    ranked_ids = [entry["candidate_id"] for _, entry in scored_candidates[:max_candidates]]
+    session.flush()
+    pending_count = len(list_pending_strategy_candidates(session, workspace_id=workspace_id, limit=200))
+
+    session.add(
+        WorkspaceEvent(
+            workspace_id=workspace_id,
+            event_type="x_strategy_discovery_completed",
+            payload_json=_json_dumps(
+                {
+                    "status": "discovered",
+                    "query": query,
+                    "scanned_users": scanned_users,
+                    "discovered": discovered,
+                    "updated": updated,
+                    "pending_count": pending_count,
+                    "candidate_ids": ranked_ids,
+                    "errors": errors,
+                }
+            ),
+        )
+    )
+    session.commit()
+
+    return {
+        "workspace_id": workspace_id,
+        "status": "discovered",
+        "query": query,
+        "scanned_users": scanned_users,
+        "discovered": discovered,
+        "updated": updated,
+        "pending_count": pending_count,
+        "candidates": [entry for _, entry in scored_candidates[:max_candidates]],
+        "errors": errors,
+    }
+
+
+def approve_strategy_candidate(
+    session: Session,
+    *,
+    workspace_id: str,
+    candidate_id: str,
+    reviewed_by_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    row = session.scalar(
+        select(XStrategyDiscoveryCandidate).where(
+            XStrategyDiscoveryCandidate.workspace_id == workspace_id,
+            XStrategyDiscoveryCandidate.id == candidate_id,
+        )
+    )
+    if row is None:
+        return None
+
+    watchlist_row = upsert_watchlist_account(
+        session,
+        workspace_id=workspace_id,
+        account_user_id=row.account_user_id,
+        account_username=row.account_username,
+        added_by_user_id=reviewed_by_user_id,
+    )
+    row.status = "approved"
+    row.reviewed_by_user_id = reviewed_by_user_id
+    row.reviewed_at = datetime.now(timezone.utc)
+    row.updated_at = datetime.now(timezone.utc)
+    session.add(
+        WorkspaceEvent(
+            workspace_id=workspace_id,
+            event_type="x_strategy_candidate_approved",
+            payload_json=_json_dumps(
+                {
+                    "candidate_id": row.id,
+                    "account_user_id": row.account_user_id,
+                    "account_username": row.account_username,
+                    "watchlist_id": watchlist_row.id,
+                }
+            ),
+        )
+    )
+    session.commit()
+    return {
+        "candidate_id": row.id,
+        "account_user_id": row.account_user_id,
+        "account_username": row.account_username,
+        "status": row.status,
+        "watchlist_status": watchlist_row.status,
+    }
+
+
+def reject_strategy_candidate(
+    session: Session,
+    *,
+    workspace_id: str,
+    candidate_id: str,
+    reviewed_by_user_id: str,
+) -> Optional[Dict[str, Any]]:
+    row = session.scalar(
+        select(XStrategyDiscoveryCandidate).where(
+            XStrategyDiscoveryCandidate.workspace_id == workspace_id,
+            XStrategyDiscoveryCandidate.id == candidate_id,
+        )
+    )
+    if row is None:
+        return None
+
+    row.status = "rejected"
+    row.reviewed_by_user_id = reviewed_by_user_id
+    row.reviewed_at = datetime.now(timezone.utc)
+    row.updated_at = datetime.now(timezone.utc)
+    session.add(
+        WorkspaceEvent(
+            workspace_id=workspace_id,
+            event_type="x_strategy_candidate_rejected",
+            payload_json=_json_dumps(
+                {
+                    "candidate_id": row.id,
+                    "account_user_id": row.account_user_id,
+                    "account_username": row.account_username,
+                }
+            ),
+        )
+    )
+    session.commit()
+    return {
+        "candidate_id": row.id,
+        "account_user_id": row.account_user_id,
+        "account_username": row.account_username,
+        "status": row.status,
+    }
 
 
 def _upsert_competitor_post(
@@ -425,4 +881,3 @@ def latest_workspace_strategy_report(session: Session, *, workspace_id: str) -> 
         "recommendations": recommendation_payload.get("items", []),
         "generated_at": _normalize_dt(pattern_row.generated_at).isoformat() if pattern_row is not None else None,
     }
-

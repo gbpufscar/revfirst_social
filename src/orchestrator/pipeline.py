@@ -20,7 +20,7 @@ from src.integrations.x.service import get_workspace_x_access_token
 from src.integrations.x.x_client import XClient
 from src.media.service import generate_image_asset
 from src.storage.models import ApprovalQueueItem, DailyPostDraft, WorkspaceEvent
-from src.strategy.x_growth_strategy_agent import run_workspace_strategy_scan
+from src.strategy.x_growth_strategy_agent import run_workspace_strategy_discovery, run_workspace_strategy_scan
 
 
 _ALLOWED_QUEUE_TYPES = {"reply", "post", "email", "blog", "instagram"}
@@ -207,6 +207,40 @@ def _run_strategy_agent(
         return {
             "status": "failed",
             "error": "invalid_strategy_scan_response",
+            "interval_hours": interval_hours,
+        }
+    result["interval_hours"] = interval_hours
+    return result
+
+
+def _run_strategy_discovery_agent(
+    session: Session,
+    *,
+    workspace_id: str,
+    x_client: XClient,
+) -> Dict[str, Any]:
+    settings = get_settings()
+    interval_hours = max(1, settings.scheduler_strategy_discovery_interval_hours)
+    if not _is_workspace_event_due(
+        session,
+        workspace_id=workspace_id,
+        event_type="x_strategy_discovery_completed",
+        interval_hours=interval_hours,
+    ):
+        return {
+            "status": "skipped_interval",
+            "interval_hours": interval_hours,
+        }
+
+    result = run_workspace_strategy_discovery(
+        session,
+        workspace_id=workspace_id,
+        x_client=x_client,
+    )
+    if not isinstance(result, dict):
+        return {
+            "status": "failed",
+            "error": "invalid_strategy_discovery_response",
             "interval_hours": interval_hours,
         }
     result["interval_hours"] = interval_hours
@@ -532,6 +566,20 @@ def run_workspace_pipeline(
                 "error": str(exc),
             }
 
+    strategy_discovery_agent: Dict[str, Any] = {"status": "disabled"}
+    if settings.scheduler_strategy_discovery_enabled:
+        try:
+            strategy_discovery_agent = _run_strategy_discovery_agent(
+                session,
+                workspace_id=workspace_id,
+                x_client=x_client,
+            )
+        except Exception as exc:
+            strategy_discovery_agent = {
+                "status": "failed",
+                "error": str(exc),
+            }
+
     return {
         "status": "executed",
         "ingested": ingestion.fetched,
@@ -544,5 +592,6 @@ def run_workspace_pipeline(
         "queued_reply_candidates": queued_reply_candidates,
         "daily_post_queue": daily_post_queue,
         "growth_agent": growth_agent,
+        "strategy_discovery_agent": strategy_discovery_agent,
         "strategy_agent": strategy_agent,
     }

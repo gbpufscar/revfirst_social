@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Optional
 import uuid
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.storage.db import Base
@@ -830,6 +830,55 @@ class XGrowthInsight(Base):
     __table_args__ = (
         Index("ix_x_growth_insights_workspace_created_at", "workspace_id", "created_at"),
         Index("ix_x_growth_insights_workspace_period_created_at", "workspace_id", "period_type", "created_at"),
+    )
+
+
+class XStrategyDiscoveryCandidate(Base):
+    __tablename__ = "x_strategy_discovery_candidates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    account_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    source_query: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    signal_post_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    followers_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tweet_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    avg_engagement: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    cadence_per_day: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    rationale_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    reviewed_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "account_user_id", name="uq_x_strategy_discovery_workspace_account"),
+        Index("ix_x_strategy_discovery_workspace_status_score", "workspace_id", "status", "score"),
+        Index("ix_x_strategy_discovery_workspace_discovered_at", "workspace_id", "discovered_at"),
     )
 
 

@@ -143,11 +143,14 @@ def _render_strategy_scan_reply(data: Dict[str, Any]) -> str:
     watchlist_count = int(data.get("watchlist_count") or 0)
     ingested_posts = int(data.get("ingested_posts") or 0)
     if status in {"missing_x_oauth", "no_watchlist", "no_data"}:
+        next_action = "Proxima acao: rode /strategy_discover run e depois aprove candidatos com /strategy_discover queue."
+        if status == "no_watchlist":
+            next_action = "Proxima acao: rode /strategy_discover run para gerar candidatos da watchlist."
         return (
             "Scan de estrategia nao concluido.\n"
             f"status: {status}\n"
             f"watchlist: {watchlist_count}\n"
-            "Proxima acao: adicione conta alvo com /strategy_scan <account_user_id> <username>."
+            f"{next_action}"
         )
 
     recommendations = data.get("recommendations") if isinstance(data.get("recommendations"), list) else []
@@ -172,6 +175,54 @@ def _render_strategy_report_reply(data: Dict[str, Any]) -> str:
         f"- Confianca: {int(data.get('confidence_score') or 0)}\n"
         f"Acao sugerida: {first_recommendation}"
     )
+
+
+def _render_strategy_discovery_reply(data: Dict[str, Any]) -> str:
+    status = str(data.get("status") or "unknown")
+    if status in {"missing_x_oauth", "search_failed"}:
+        return (
+            "Descoberta de contas nao concluida.\n"
+            f"status: {status}\n"
+            "Proxima acao: valide OAuth do X e tente /strategy_discover run."
+        )
+    candidates = data.get("candidates") if isinstance(data.get("candidates"), list) else []
+    lines = [
+        "Descoberta de contas concluida.",
+        f"- Usuarios analisados: {int(data.get('scanned_users') or 0)}",
+        f"- Novos candidatos: {int(data.get('discovered') or 0)}",
+        f"- Candidatos atualizados: {int(data.get('updated') or 0)}",
+        f"- Pendentes para aprovacao: {int(data.get('pending_count') or 0)}",
+    ]
+    if candidates:
+        top = candidates[0] if isinstance(candidates[0], dict) else {}
+        lines.append(
+            "Melhor candidato: "
+            f"{top.get('account_username') or 'n/d'} "
+            f"(score={int(top.get('score') or 0)}, id={top.get('candidate_id')})"
+        )
+    lines.append("Proxima acao: /strategy_discover queue")
+    return "\n".join(lines)
+
+
+def _render_strategy_candidates_queue(data: Dict[str, Any]) -> str:
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    if not items:
+        return "Fila de candidatos de estrategia vazia.\nProxima acao: rode /strategy_discover run."
+
+    lines = [f"Candidatos de estrategia pendentes ({len(items)}):"]
+    for index, row in enumerate(items[:5], start=1):
+        if not isinstance(row, dict):
+            continue
+        candidate_id = str(row.get("candidate_id") or "sem-id")
+        username = str(row.get("account_username") or "n/d")
+        user_id = str(row.get("account_user_id") or "n/d")
+        score = int(row.get("score") or 0)
+        followers = row.get("followers_count")
+        lines.append(
+            f"{index}. @{username} | user_id={user_id} | score={score} | followers={followers if followers is not None else 'n/d'}"
+        )
+        lines.append(f"Acoes: /strategy_discover approve {candidate_id} | /strategy_discover reject {candidate_id}")
+    return "\n".join(lines)
 
 
 def _render_chat_reply(response: ControlWebhookResponse) -> str:
@@ -200,12 +251,45 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
         body = _render_strategy_scan_reply(data)
     elif response.message == "strategy_report_ok":
         body = _render_strategy_report_reply(data)
+    elif response.message == "strategy_discovery_ok":
+        body = _render_strategy_discovery_reply(data)
+    elif response.message == "strategy_discovery_not_ready":
+        body = _render_strategy_discovery_reply(data)
+    elif response.message == "strategy_candidates_queue":
+        body = _render_strategy_candidates_queue(data)
+    elif response.message == "strategy_candidates_queue_empty":
+        body = _render_strategy_candidates_queue(data)
     elif response.message == "strategy_watchlist_updated":
         body = (
             "Conta adicionada na watchlist de estrategia.\n"
             f"account_user_id: {data.get('account_user_id')}\n"
             f"username: {data.get('account_username') or 'n/d'}\n"
             "Proxima acao: /strategy_scan run"
+        )
+    elif response.message == "strategy_candidate_approved":
+        body = (
+            "Candidato aprovado e movido para watchlist.\n"
+            f"candidate_id: {data.get('candidate_id')}\n"
+            f"account_user_id: {data.get('account_user_id')}\n"
+            f"username: {data.get('account_username') or 'n/d'}\n"
+            "Proxima acao: /strategy_scan run"
+        )
+    elif response.message == "strategy_candidate_rejected":
+        body = (
+            "Candidato rejeitado com sucesso.\n"
+            f"candidate_id: {data.get('candidate_id')}\n"
+            f"account_user_id: {data.get('account_user_id')}\n"
+            f"username: {data.get('account_username') or 'n/d'}"
+        )
+    elif response.message == "strategy_candidate_missing_id":
+        body = "Informe candidate_id. Exemplo: /strategy_discover approve <candidate_id>."
+    elif response.message == "strategy_candidate_not_found":
+        body = "Candidate_id nao encontrado. Rode /strategy_discover queue para listar pendentes."
+    elif response.message == "strategy_discovery_invalid_args":
+        body = (
+            "Uso invalido de strategy_discover.\n"
+            "Exemplos: /strategy_discover run | /strategy_discover queue | "
+            "/strategy_discover approve <candidate_id> | /strategy_discover reject <candidate_id>."
         )
     elif response.message == "strategy_report_empty":
         body = "Relatorio de estrategia ainda vazio. Rode /strategy_scan run primeiro."

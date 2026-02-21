@@ -65,6 +65,7 @@ _HANDLER_MAP: Dict[str, Handler] = {
     "logs": logs.handle,
     "seed": seed.handle,
     "strategy_scan": strategy.handle_scan,
+    "strategy_discover": strategy.handle_discover,
     "strategy_report": strategy.handle_report,
 }
 

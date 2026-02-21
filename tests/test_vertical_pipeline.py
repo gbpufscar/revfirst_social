@@ -245,8 +245,20 @@ def test_vertical_pipeline_executes_growth_and_strategy_agents_when_due(monkeypa
             "errors": [],
         },
     )
+    monkeypatch.setattr(
+        orchestrator_pipeline,
+        "run_workspace_strategy_discovery",
+        lambda session, *, workspace_id, x_client: {  # noqa: ARG005
+            "status": "discovered",
+            "pending_count": 2,
+            "discovered": 2,
+            "updated": 0,
+            "errors": [],
+        },
+    )
     monkeypatch.setenv("SCHEDULER_GROWTH_COLLECTION_ENABLED", "true")
     monkeypatch.setenv("SCHEDULER_STRATEGY_SCAN_ENABLED", "true")
+    monkeypatch.setenv("SCHEDULER_STRATEGY_DISCOVERY_ENABLED", "true")
     get_settings.cache_clear()
     get_token_key.cache_clear()
 
@@ -283,6 +295,8 @@ def test_vertical_pipeline_executes_growth_and_strategy_agents_when_due(monkeypa
             assert result["growth_agent"]["snapshot_id"] == "snapshot-1"
             assert result["strategy_agent"]["status"] == "scanned"
             assert result["strategy_agent"]["watchlist_count"] == 1
+            assert result["strategy_discovery_agent"]["status"] == "discovered"
+            assert result["strategy_discovery_agent"]["pending_count"] == 2
     finally:
         get_token_key.cache_clear()
         get_settings.cache_clear()
@@ -303,6 +317,8 @@ def test_vertical_pipeline_skips_growth_and_strategy_when_interval_not_due(monke
     monkeypatch.setenv("SCHEDULER_GROWTH_COLLECTION_INTERVAL_HOURS", "24")
     monkeypatch.setenv("SCHEDULER_STRATEGY_SCAN_ENABLED", "true")
     monkeypatch.setenv("SCHEDULER_STRATEGY_SCAN_INTERVAL_HOURS", "168")
+    monkeypatch.setenv("SCHEDULER_STRATEGY_DISCOVERY_ENABLED", "true")
+    monkeypatch.setenv("SCHEDULER_STRATEGY_DISCOVERY_INTERVAL_HOURS", "24")
     get_settings.cache_clear()
     get_token_key.cache_clear()
 
@@ -346,6 +362,14 @@ def test_vertical_pipeline_skips_growth_and_strategy_when_interval_not_due(monke
                     created_at=now,
                 )
             )
+            session.add(
+                WorkspaceEvent(
+                    workspace_id=workspace_id,
+                    event_type="x_strategy_discovery_completed",
+                    payload_json="{}",
+                    created_at=now,
+                )
+            )
             session.commit()
 
             result = run_workspace_pipeline(
@@ -356,6 +380,7 @@ def test_vertical_pipeline_skips_growth_and_strategy_when_interval_not_due(monke
 
             assert result["growth_agent"]["status"] == "skipped_interval"
             assert result["strategy_agent"]["status"] == "skipped_interval"
+            assert result["strategy_discovery_agent"]["status"] == "skipped_interval"
     finally:
         get_token_key.cache_clear()
         get_settings.cache_clear()
