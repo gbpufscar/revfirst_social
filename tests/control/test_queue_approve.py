@@ -64,6 +64,9 @@ def test_queue_and_approve_publish_reply(monkeypatch, tmp_path) -> None:
         assert queue_payload["accepted"] is True
         assert queue_payload["data"]["count"] == 1
         assert queue_payload["data"]["items"][0]["id"] == queue_id
+        assert queue_payload["data"]["items"][0]["queue_id"] == queue_id
+        assert queue_payload["data"]["items"][0]["copy"].startswith("Practical take.")
+        assert queue_payload["data"]["items"][0]["image_url"] is None
 
         approve_response = context.client.post(
             f"/control/telegram/webhook/{context.workspace_id}",

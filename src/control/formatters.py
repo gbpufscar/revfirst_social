@@ -13,12 +13,18 @@ def _truncate(value: str, *, size: int = 140) -> str:
 
 
 def format_queue_item(item: Dict[str, Any]) -> Dict[str, Any]:
+    queue_id = str(item.get("queue_id") or item.get("id") or "")
+    copy_text = str(item.get("copy") or item.get("content_text") or "")
+    image_url = str(item.get("image_url") or "").strip() or None
     return {
         "id": item.get("id"),
+        "queue_id": queue_id,
         "type": item.get("item_type"),
         "intent": item.get("intent"),
         "score": item.get("opportunity_score"),
-        "preview": _truncate(str(item.get("content_text") or "")),
+        "copy": copy_text,
+        "image_url": image_url,
+        "preview": _truncate(copy_text),
         "status": item.get("status"),
     }
 
