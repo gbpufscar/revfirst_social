@@ -8,6 +8,7 @@ import json
 from typing import Any, Dict
 
 from src.core.config import get_settings
+from src.control.services import get_workspace_operational_mode
 from src.control.state import is_global_kill_switch, is_workspace_paused
 from src.integrations.x.x_client import get_x_client
 from src.orchestrator.locks import WorkspaceLockManager
@@ -22,9 +23,18 @@ def run_scheduler_once(*, limit: int | None = None) -> SchedulerRunResult:
     load_models()
     x_client = get_x_client()
     redis_client = get_redis_client()
+    session_factory = get_session_factory()
+
+    def _resolve_workspace_mode(workspace_id: str) -> str:
+        with session_factory() as session:
+            return get_workspace_operational_mode(
+                session,
+                workspace_id=workspace_id,
+                redis_client=redis_client,
+            )
 
     scheduler = WorkspaceScheduler(
-        session_factory=get_session_factory(),
+        session_factory=session_factory,
         lock_manager=WorkspaceLockManager(
             redis_client,
             ttl_seconds=settings.scheduler_workspace_lock_ttl_seconds,
@@ -36,6 +46,7 @@ def run_scheduler_once(*, limit: int | None = None) -> SchedulerRunResult:
         ),
         workspace_pause_checker=lambda workspace_id: is_workspace_paused(redis_client, workspace_id=workspace_id),
         global_kill_switch_checker=lambda: is_global_kill_switch(redis_client),
+        workspace_mode_resolver=_resolve_workspace_mode,
     )
     default_limit = settings.scheduler_max_workspaces_per_run
     return scheduler.run_once(limit=limit or default_limit)

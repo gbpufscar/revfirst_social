@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 import src.channels.instagram.publisher as instagram_publisher_module
 import src.control.telegram_bot as control_bot_module
+import src.control.handlers.stability as stability_handler_module
 import src.control.handlers.strategy as strategy_handler_module
 from src.control.services import create_queue_item
 from src.storage.models import ApprovalQueueItem, PipelineRun
@@ -70,6 +71,8 @@ def test_control_router_dispatches_help_and_run_commands(monkeypatch, tmp_path) 
         assert help_payload["accepted"] is True
         assert help_payload["message"] == "available_commands"
         assert "/status" in help_payload["data"]["commands"]
+        assert "/mode" in help_payload["data"]["commands"]
+        assert "/stability" in help_payload["data"]["commands"]
 
         run_response = context.client.post(
             f"/control/telegram/webhook/{context.workspace_id}",
@@ -124,6 +127,95 @@ def test_control_router_returns_unknown_command(monkeypatch, tmp_path) -> None:
         payload = response.json()
         assert payload["accepted"] is False
         assert payload["message"] == "unknown_command"
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_stability_report(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        stability_handler_module,
+        "build_workspace_stability_report",
+        lambda session, *, workspace_id, redis_client: {  # noqa: ARG005
+            "workspace_id": workspace_id,
+            "overall_status": "warning",
+            "critical_count": 0,
+            "warning_count": 2,
+            "checks": [],
+            "recommended_actions": ["Validar scheduler."],
+            "containment_recommended": False,
+        },
+    )
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2103,
+                "message": {
+                    "message_id": 704,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/stability",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "stability_report_ok"
+        assert payload["data"]["overall_status"] == "warning"
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_stability_containment(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        stability_handler_module,
+        "build_workspace_stability_report",
+        lambda session, *, workspace_id, redis_client: {  # noqa: ARG005
+            "workspace_id": workspace_id,
+            "overall_status": "critical",
+            "critical_count": 2,
+            "warning_count": 1,
+            "checks": [],
+            "recommended_actions": ["Pausar workspace."],
+            "containment_recommended": True,
+        },
+    )
+    monkeypatch.setattr(
+        stability_handler_module,
+        "apply_stability_containment",
+        lambda session, *, workspace_id, redis_client, report: {  # noqa: ARG005
+            "requested": True,
+            "overall_status": "critical",
+            "containment_recommended": True,
+            "already_paused": False,
+            "actions_applied": ["workspace_paused"],
+        },
+    )
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2104,
+                "message": {
+                    "message_id": 705,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/stability contain",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "stability_containment_applied"
+        assert "workspace_paused" in payload["data"]["actions_applied"]
     finally:
         teardown_control_test_context()
 

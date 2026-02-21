@@ -15,6 +15,8 @@ Last Updated: 2026-02-19
 |---|---|---|---|---|
 | `/help` | yes | yes | yes | Read-only help text |
 | `/status` | yes | yes | yes | Runtime and lock status |
+| `/mode` | yes | yes | no | Show/set operational mode (`manual`, `semi_autonomous`, `autonomous_limited`, `containment`) |
+| `/stability` | yes | yes | yes | Stability guard diagnosis (OAuth, queue, locks, scheduler, config) |
 | `/metrics` | yes | yes | yes | Daily summary and plan usage |
 | `/daily_report` | yes | yes | yes | Reporting agent daily summary |
 | `/weekly_report` | yes | yes | yes | Reporting agent weekly summary |
@@ -29,6 +31,7 @@ Last Updated: 2026-02-19
 | `/channel enable\|disable ...` | yes | yes | no | Channel feature flags |
 | `/limit replies\|posts <n>` | yes | yes | no | Temporary override with TTL |
 | `/seed <text>` | yes | yes | yes | Seed ingestion + interpretation |
+| `/stability contain` | yes | yes | no | Apply containment action when status is critical (pause workspace) |
 
 ## Security Rules
 

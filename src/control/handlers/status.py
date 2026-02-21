@@ -9,7 +9,12 @@ from sqlalchemy import desc, select
 
 from src.control.command_schema import ControlResponse
 from src.control.formatters import format_recent_errors
-from src.control.services import get_or_create_control_setting, latest_pipeline_runs, parse_channels
+from src.control.services import (
+    get_or_create_control_setting,
+    get_workspace_operational_mode,
+    latest_pipeline_runs,
+    parse_channels,
+)
 from src.control.state import is_global_kill_switch, is_workspace_paused
 from src.core.runtime import load_runtime_config
 from src.storage.models import AdminAction, PipelineRun, PublishAuditLog
@@ -126,9 +131,15 @@ def handle(context: "CommandContext") -> ControlResponse:
 
     paused_redis = is_workspace_paused(context.redis_client, workspace_id=workspace_id)
     global_kill = is_global_kill_switch(context.redis_client)
+    mode = get_workspace_operational_mode(
+        context.session,
+        workspace_id=workspace_id,
+        redis_client=context.redis_client,
+    )
 
     data = {
         "workspace_id": workspace_id,
+        "mode": mode,
         "single_workspace_mode": runtime.single_workspace_mode,
         "primary_workspace_id": runtime.primary_workspace_id,
         "paused": bool(settings.is_paused) or paused_redis,

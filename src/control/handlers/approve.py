@@ -37,6 +37,15 @@ def _require_queue_id(context: "CommandContext") -> str | None:
     return str(context.command.args[0]).strip()
 
 
+def _owner_override_requested(context: "CommandContext") -> bool:
+    if context.actor.role != "owner":
+        return False
+    if len(context.command.args) < 2:
+        return False
+    flags = {str(value).strip().lower() for value in context.command.args[1:] if str(value).strip()}
+    return bool(flags.intersection({"override", "--override", "owner_override=true"}))
+
+
 def _parse_scheduled_for(metadata: dict[str, object]) -> datetime | None:
     raw_value = metadata.get("scheduled_for")
     if raw_value is None:
@@ -56,6 +65,7 @@ def _parse_scheduled_for(metadata: dict[str, object]) -> datetime | None:
 
 def handle(context: "CommandContext") -> ControlResponse:
     workspace_id = context.envelope.workspace_id
+    owner_override = _owner_override_requested(context)
     queue_id = _require_queue_id(context)
     if queue_id:
         item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
@@ -152,6 +162,7 @@ def handle(context: "CommandContext") -> ControlResponse:
                 thread_id=(str(metadata.get("thread_id")) if metadata.get("thread_id") else None),
                 target_author_id=(str(metadata.get("target_author_id")) if metadata.get("target_author_id") else None),
                 x_client=context.x_client,
+                owner_override=owner_override,
             )
         elif item.item_type == "post":
             result = publish_post(
@@ -159,6 +170,7 @@ def handle(context: "CommandContext") -> ControlResponse:
                 workspace_id=workspace_id,
                 text=item.content_text,
                 x_client=context.x_client,
+                owner_override=owner_override,
             )
         elif item.item_type == "email":
             recipients_raw = metadata.get("recipients")
@@ -176,6 +188,7 @@ def handle(context: "CommandContext") -> ControlResponse:
                 recipients=recipients,
                 source_kind=item.source_kind,
                 source_ref_id=item.source_ref_id,
+                owner_override=owner_override,
             )
         elif item.item_type == "blog":
             image_url = str(metadata.get("image_url") or "").strip()
@@ -187,6 +200,7 @@ def handle(context: "CommandContext") -> ControlResponse:
                 image_url=(image_url or None),
                 source_kind=item.source_kind,
                 source_ref_id=item.source_ref_id,
+                owner_override=owner_override,
             )
         else:
             scheduled_for = _parse_scheduled_for(metadata)
@@ -201,6 +215,7 @@ def handle(context: "CommandContext") -> ControlResponse:
                 source_kind=item.source_kind,
                 source_ref_id=item.source_ref_id,
                 scheduled_for=(scheduled_for.isoformat() if scheduled_for is not None else None),
+                owner_override=owner_override,
             )
     except Exception:
         mark_queue_item_failed(context.session, item=item, error_message="unexpected_publish_error")

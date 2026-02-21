@@ -10,6 +10,7 @@ from redis import Redis
 
 _GLOBAL_KILL_SWITCH_KEY = "revfirst:control:global_kill_switch"
 _WORKSPACE_PAUSE_KEY = "revfirst:{workspace_id}:control:paused"
+_WORKSPACE_MODE_KEY = "revfirst:{workspace_id}:control:mode"
 _CHANNEL_CACHE_KEY = "revfirst:{workspace_id}:control:channels"
 _PIPELINE_RUN_LOCK_KEY = "revfirst:{workspace_id}:control:run:{pipeline}:lock"
 
@@ -44,6 +45,10 @@ def channel_cache_key(workspace_id: str) -> str:
     return _CHANNEL_CACHE_KEY.format(workspace_id=workspace_id)
 
 
+def workspace_mode_key(workspace_id: str) -> str:
+    return _WORKSPACE_MODE_KEY.format(workspace_id=workspace_id)
+
+
 def pipeline_run_lock_key(workspace_id: str, pipeline: str) -> str:
     return _PIPELINE_RUN_LOCK_KEY.format(workspace_id=workspace_id, pipeline=pipeline)
 
@@ -71,6 +76,17 @@ def set_workspace_paused(redis_client: Redis, *, workspace_id: str, paused: bool
         redis_client.set(key, "true")
         return
     redis_client.delete(key)
+
+
+def get_workspace_mode_cached(redis_client: Redis, *, workspace_id: str) -> str | None:
+    value = redis_client.get(workspace_mode_key(workspace_id))
+    if value is None:
+        return None
+    return str(value).strip().lower() or None
+
+
+def set_workspace_mode_cached(redis_client: Redis, *, workspace_id: str, mode: str) -> None:
+    redis_client.set(workspace_mode_key(workspace_id), str(mode).strip().lower())
 
 
 def cache_channels(redis_client: Redis, *, workspace_id: str, channels_json: str) -> None:

@@ -90,6 +90,7 @@ curl -ik https://social.revfirst.cloud/metrics | head -n 30
 Expected:
 - All endpoints return `200`.
 - `/health` reports DB and Redis `ok=true`.
+- Telegram `/status` must show `mode` and match planned release mode.
 
 OAuth official account validation (X):
 

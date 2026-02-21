@@ -496,6 +496,22 @@ class WorkspaceControlSetting(Base):
         nullable=False,
     )
     is_paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    operational_mode: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="semi_autonomous",
+        server_default="semi_autonomous",
+    )
+    last_mode_change_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    mode_changed_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     channels_json: Mapped[str] = mapped_column(Text, nullable=False, default='{"blog":false,"email":false,"instagram":false,"x":true}')
     reply_limit_override: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     post_limit_override: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

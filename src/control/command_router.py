@@ -16,6 +16,7 @@ from src.control.handlers import (
     help as help_handler,
     limits,
     logs,
+    mode,
     metrics,
     pause,
     preview,
@@ -24,6 +25,7 @@ from src.control.handlers import (
     run,
     seed,
     status,
+    stability,
     strategy,
 )
 from src.control.security import ControlActor, assert_command_permission
@@ -48,6 +50,8 @@ Handler = Callable[[CommandContext], ControlResponse]
 _HANDLER_MAP: Dict[str, Handler] = {
     "help": help_handler.handle,
     "status": status.handle,
+    "mode": mode.handle,
+    "stability": stability.handle,
     "metrics": metrics.handle,
     "growth": growth.handle,
     "growth_weekly": growth.handle_weekly,

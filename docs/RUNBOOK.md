@@ -21,6 +21,11 @@ Scheduler command policy:
 - Canonical command: `python -m src.orchestrator.manager`
 - Do not use legacy command under the `orchestrator` package.
 
+Operational mode policy:
+- Check current mode via Telegram: `/mode`
+- Change mode (owner/admin): `/mode set <manual|semi_autonomous|autonomous_limited|containment> [confirm]`
+- `manual` and `containment` disable scheduler execution.
+
 ## 3. Quick Health Checks
 
 ```bash

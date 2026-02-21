@@ -42,6 +42,8 @@ class ControlActor:
 COMMAND_ROLE_MATRIX: Dict[str, Set[str]] = {
     "help": {"owner", "admin", "member"},
     "status": {"owner", "admin", "member"},
+    "mode": {"owner", "admin"},
+    "stability": {"owner", "admin", "member"},
     "metrics": {"owner", "admin", "member"},
     "growth": {"owner", "admin", "member"},
     "growth_weekly": {"owner", "admin", "member"},
