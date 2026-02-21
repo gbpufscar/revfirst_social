@@ -4,9 +4,47 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 import src.channels.instagram.publisher as instagram_publisher_module
+import src.control.telegram_bot as control_bot_module
 from src.control.services import create_queue_item
 from src.storage.models import ApprovalQueueItem, PipelineRun
 from tests.control.conftest import create_control_test_context, teardown_control_test_context
+
+
+def test_control_router_sends_chat_reply_when_command_processed(monkeypatch, tmp_path) -> None:
+    sent_messages: list[dict[str, str]] = []
+
+    def _fake_send_telegram_chat_message(*, chat_id: str, text: str) -> None:
+        sent_messages.append({"chat_id": chat_id, "text": text})
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:phase12-test-token")
+    monkeypatch.setattr(control_bot_module, "_send_telegram_chat_message", _fake_send_telegram_chat_message)
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 1999,
+                "message": {
+                    "message_id": 600,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/status",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "status_ok"
+
+        assert len(sent_messages) == 1
+        assert sent_messages[0]["chat_id"] == "7001"
+        assert "Status do workspace" in sent_messages[0]["text"]
+        assert "/queue" in sent_messages[0]["text"]
+    finally:
+        teardown_control_test_context()
 
 
 def test_control_router_dispatches_help_and_run_commands(monkeypatch, tmp_path) -> None:
@@ -84,6 +122,121 @@ def test_control_router_returns_unknown_command(monkeypatch, tmp_path) -> None:
         payload = response.json()
         assert payload["accepted"] is False
         assert payload["message"] == "unknown_command"
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_preview_sends_photo_for_queue_item(monkeypatch, tmp_path) -> None:
+    sent_messages: list[dict[str, str]] = []
+    sent_photos: list[dict[str, str | None]] = []
+
+    def _fake_send_telegram_chat_message(*, chat_id: str, text: str) -> None:
+        sent_messages.append({"chat_id": chat_id, "text": text})
+
+    def _fake_send_telegram_chat_photo(*, chat_id: str, image_url: str, caption: str | None = None) -> None:
+        sent_photos.append({"chat_id": chat_id, "image_url": image_url, "caption": caption})
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:phase12-test-token")
+    monkeypatch.setattr(control_bot_module, "_send_telegram_chat_message", _fake_send_telegram_chat_message)
+    monkeypatch.setattr(control_bot_module, "_send_telegram_chat_photo", _fake_send_telegram_chat_photo)
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="post",
+                content_text="Founder note with image preview and clear CTA.",
+                source_kind="manual_test",
+                source_ref_id="preview-1",
+                intent="daily_post",
+                opportunity_score=95,
+                idempotency_key="test-preview-photo-1",
+                metadata={"image_url": "https://cdn.revfirst.cloud/preview-1.png"},
+            )
+            queue_id = queue_item.id
+
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2102,
+                "message": {
+                    "message_id": 702,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/preview {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "preview_ready"
+        assert payload["data"]["queue_id"] == queue_id
+        assert payload["data"]["image_url"] == "https://cdn.revfirst.cloud/preview-1.png"
+
+        assert len(sent_photos) == 1
+        assert sent_photos[0]["chat_id"] == "7001"
+        assert sent_photos[0]["image_url"] == "https://cdn.revfirst.cloud/preview-1.png"
+        assert queue_id in str(sent_photos[0]["caption"])
+
+        assert len(sent_messages) == 1
+        assert "Preview pronto para POST" in sent_messages[0]["text"]
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_plain_text_sim_approves_latest_pending_item(monkeypatch, tmp_path) -> None:
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        manual_token = context.client.post(
+            "/integrations/x/oauth/token/manual",
+            json={
+                "workspace_id": context.workspace_id,
+                "access_token": "phase12-x-access-token",
+                "refresh_token": "phase12-x-refresh-token",
+                "expires_in": 3600,
+                "scope": "tweet.read tweet.write users.read",
+            },
+            headers={"Authorization": f"Bearer {context.access_token}"},
+        )
+        assert manual_token.status_code == 200
+
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="post",
+                content_text="Founder update for plain text approval flow.",
+                source_kind="manual_test",
+                source_ref_id="plain-sim-1",
+                intent="daily_post",
+                opportunity_score=88,
+                idempotency_key="test-plain-sim-approval-1",
+                metadata={},
+            )
+            queue_id = queue_item.id
+
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2103,
+                "message": {
+                    "message_id": 703,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "sim",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "approved_and_published"
+        assert payload["data"]["queue_id"] == queue_id
     finally:
         teardown_control_test_context()
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from src.control.command_schema import ControlResponse
 from src.control.services import (
     get_queue_item,
+    list_pending_queue_items,
     mark_queue_item_approved,
     mark_queue_item_failed,
     mark_queue_item_publishing,
@@ -56,10 +57,16 @@ def _parse_scheduled_for(metadata: dict[str, object]) -> datetime | None:
 def handle(context: "CommandContext") -> ControlResponse:
     workspace_id = context.envelope.workspace_id
     queue_id = _require_queue_id(context)
-    if not queue_id:
-        return ControlResponse(success=False, message="missing_queue_id", data={})
+    if queue_id:
+        item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
+    else:
+        latest_pending = list_pending_queue_items(context.session, workspace_id=workspace_id, limit=1)
+        item = latest_pending[0] if latest_pending else None
+        queue_id = item.id if item is not None else None
 
-    item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
+    if queue_id is None:
+        return ControlResponse(success=False, message="no_pending_queue_item", data={})
+
     if item is None:
         return ControlResponse(success=False, message="queue_item_not_found", data={"queue_id": queue_id})
 

@@ -12,6 +12,14 @@ if TYPE_CHECKING:
     from src.control.command_router import CommandContext
 
 
+def _extract_image_url(metadata: dict[str, object]) -> str | None:
+    for key in ("image_url", "media_url", "asset_url"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def handle(context: "CommandContext") -> ControlResponse:
     workspace_id = context.envelope.workspace_id
     items = list_pending_queue_items(context.session, workspace_id=workspace_id, limit=5)
@@ -19,13 +27,7 @@ def handle(context: "CommandContext") -> ControlResponse:
     payload = []
     for item in items:
         metadata = parse_queue_metadata(item)
-        image_url = None
-        for key in ("image_url", "media_url", "asset_url"):
-            value = str(metadata.get(key) or "").strip()
-            if value:
-                image_url = value
-                break
-
+        image_url = _extract_image_url(metadata)
         payload.append(
             format_queue_item(
                 {

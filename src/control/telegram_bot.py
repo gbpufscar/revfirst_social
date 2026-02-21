@@ -47,7 +47,10 @@ def _truncate_text(value: str, *, limit: int) -> str:
 def _render_queue_reply(data: Dict[str, Any]) -> str:
     items = data.get("items")
     if not isinstance(items, list) or not items:
-        return "Fila de aprovacao vazia.\nSugestao: rode /run daily_post ou /run propose_replies."
+        return (
+            "Fila de aprovacao vazia.\n"
+            "Sugestao: rode /run daily_post ou /run propose_replies."
+        )
 
     lines = [f"Fila de aprovacao ({len(items)} item(ns)):"]
     for index, row in enumerate(items[:5], start=1):
