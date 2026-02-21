@@ -44,9 +44,14 @@ def test_control_router_sends_chat_reply_when_command_processed(monkeypatch, tmp
 
         assert len(sent_messages) == 1
         assert sent_messages[0]["chat_id"] == "7001"
-        assert "Status do workspace" in sent_messages[0]["text"]
-        assert "Telegram: HEALTHY" in sent_messages[0]["text"]
-        assert "/queue" in sent_messages[0]["text"]
+        assert "🔎 SYSTEM STATUS" in sent_messages[0]["text"]
+        assert "Mode:" in sent_messages[0]["text"]
+        assert "Scheduler:" in sent_messages[0]["text"]
+        assert "Publishing:" in sent_messages[0]["text"]
+        assert "Queue:" in sent_messages[0]["text"]
+        assert "Next Window:" in sent_messages[0]["text"]
+        assert "Coverage:" in sent_messages[0]["text"]
+        assert "Risk Level:" in sent_messages[0]["text"]
     finally:
         teardown_control_test_context()
 
