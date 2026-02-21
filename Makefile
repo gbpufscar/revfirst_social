@@ -1,7 +1,7 @@
 COMPOSE_FILE=deploy/docker-compose.yml
 COMPOSE=docker compose -f $(COMPOSE_FILE)
 
-.PHONY: up down migrate test lint build loadtest
+.PHONY: up down migrate test lint build loadtest check-prod-secrets
 
 up:
 	$(COMPOSE) up --build -d
@@ -23,3 +23,6 @@ build:
 
 loadtest:
 	python3 scripts/loadtest_basic.py --url http://localhost:$${APP_PORT:-18000}/health
+
+check-prod-secrets:
+	bash scripts/check_production_secrets.sh .env

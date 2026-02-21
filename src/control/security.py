@@ -43,10 +43,14 @@ COMMAND_ROLE_MATRIX: Dict[str, Set[str]] = {
     "help": {"owner", "admin", "member"},
     "status": {"owner", "admin", "member"},
     "metrics": {"owner", "admin", "member"},
+    "growth": {"owner", "admin", "member"},
+    "growth_weekly": {"owner", "admin", "member"},
     "daily_report": {"owner", "admin", "member"},
     "weekly_report": {"owner", "admin", "member"},
+    "strategy_report": {"owner", "admin", "member"},
     "logs": {"owner", "admin", "member"},
     "queue": {"owner", "admin", "member"},
+    "preview": {"owner", "admin", "member"},
     "approve": {"owner", "admin"},
     "reject": {"owner", "admin"},
     "pause": {"owner", "admin"},
@@ -55,6 +59,7 @@ COMMAND_ROLE_MATRIX: Dict[str, Set[str]] = {
     "channel": {"owner", "admin"},
     "limit": {"owner", "admin"},
     "seed": {"owner", "admin", "member"},
+    "strategy_scan": {"owner", "admin"},
 }
 
 

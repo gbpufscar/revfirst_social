@@ -12,16 +12,19 @@ from src.control.command_schema import ControlCommand, ControlResponse, Telegram
 from src.control.handlers import (
     approve,
     channel,
+    growth,
     help as help_handler,
     limits,
     logs,
     metrics,
     pause,
+    preview,
     queue,
     report,
     run,
     seed,
     status,
+    strategy,
 )
 from src.control.security import ControlActor, assert_command_permission
 from src.integrations.x.x_client import XClient
@@ -46,9 +49,12 @@ _HANDLER_MAP: Dict[str, Handler] = {
     "help": help_handler.handle,
     "status": status.handle,
     "metrics": metrics.handle,
+    "growth": growth.handle,
+    "growth_weekly": growth.handle_weekly,
     "daily_report": report.handle_daily,
     "weekly_report": report.handle_weekly,
     "queue": queue.handle,
+    "preview": preview.handle,
     "approve": approve.handle,
     "reject": approve.handle_reject,
     "pause": pause.handle,
@@ -58,6 +64,8 @@ _HANDLER_MAP: Dict[str, Handler] = {
     "limit": limits.handle,
     "logs": logs.handle,
     "seed": seed.handle,
+    "strategy_scan": strategy.handle_scan,
+    "strategy_report": strategy.handle_report,
 }
 
 

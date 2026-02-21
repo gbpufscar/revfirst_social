@@ -729,3 +729,243 @@ class PipelineRun(Base):
         Index("ix_pipeline_runs_workspace_created_at", "workspace_id", "created_at"),
         Index("ix_pipeline_runs_workspace_pipeline_created_at", "workspace_id", "pipeline_name", "created_at"),
     )
+
+
+class XAccountSnapshot(Base):
+    __tablename__ = "x_account_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    account_user_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    account_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    followers_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    following_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tweet_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    listed_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_x_account_snapshots_workspace_captured_at", "workspace_id", "captured_at"),
+        Index(
+            "ix_x_account_snapshots_workspace_account_captured_at",
+            "workspace_id",
+            "account_user_id",
+            "captured_at",
+        ),
+    )
+
+
+class XPostMetricsSnapshot(Base):
+    __tablename__ = "x_post_metrics_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    external_post_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    like_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reply_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    repost_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    quote_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    bookmark_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    impression_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    has_image: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_x_post_metrics_snapshots_workspace_captured_at", "workspace_id", "captured_at"),
+        Index(
+            "ix_x_post_metrics_snapshots_workspace_post_captured_at",
+            "workspace_id",
+            "external_post_id",
+            "captured_at",
+        ),
+    )
+
+
+class XGrowthInsight(Base):
+    __tablename__ = "x_growth_insights"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    period_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    period_start: Mapped[date] = mapped_column(Date, nullable=False)
+    period_end: Mapped[date] = mapped_column(Date, nullable=False)
+    kpis_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    recommendations_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_x_growth_insights_workspace_created_at", "workspace_id", "created_at"),
+        Index("ix_x_growth_insights_workspace_period_created_at", "workspace_id", "period_type", "created_at"),
+    )
+
+
+class XStrategyWatchlist(Base):
+    __tablename__ = "x_strategy_watchlist"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    account_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    account_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
+    added_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "account_user_id", name="uq_x_strategy_watchlist_workspace_account"),
+        Index("ix_x_strategy_watchlist_workspace_status_added_at", "workspace_id", "status", "added_at"),
+    )
+
+
+class XCompetitorPost(Base):
+    __tablename__ = "x_competitor_posts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    watched_account_user_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    watched_account_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    external_post_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    post_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    like_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reply_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    repost_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    quote_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    impression_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    has_image: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    raw_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id",
+            "watched_account_user_id",
+            "external_post_id",
+            name="uq_x_competitor_posts_workspace_account_post",
+        ),
+        Index(
+            "ix_x_competitor_posts_workspace_account_captured_at",
+            "workspace_id",
+            "watched_account_user_id",
+            "captured_at",
+        ),
+    )
+
+
+class XStrategyPattern(Base):
+    __tablename__ = "x_strategy_patterns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    period_window: Mapped[str] = mapped_column(String(32), nullable=False)
+    pattern_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    confidence_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_x_strategy_patterns_workspace_generated_at", "workspace_id", "generated_at"),
+    )
+
+
+class XStrategyRecommendation(Base):
+    __tablename__ = "x_strategy_recommendations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    workspace_id: Mapped[str] = mapped_column(
+        String(36),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    period_window: Mapped[str] = mapped_column(String(32), nullable=False)
+    recommendation_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    rationale_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_x_strategy_recommendations_workspace_created_at", "workspace_id", "created_at"),
+    )

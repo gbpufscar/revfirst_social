@@ -9,10 +9,11 @@ from sqlalchemy.orm import sessionmaker
 
 import src.api.main as api_main
 from src.core.config import get_settings
+from src.core.metrics import reset_metrics_for_tests
 from src.integrations.x.x_client import get_x_client
 from src.storage.db import Base, get_session, load_models
-from src.storage.models import PublishAuditLog, PublishCooldown, WorkspaceDailyUsage
-from src.storage.security import get_token_key
+from src.storage.models import PublishAuditLog, PublishCooldown, Role, User, WorkspaceDailyUsage, WorkspaceUser
+from src.storage.security import get_token_key, hash_password
 
 
 class _FakePublisherXClient:
@@ -23,6 +24,13 @@ class _FakePublisherXClient:
         del access_token, text, in_reply_to_tweet_id
         self.counter += 1
         return {"data": {"id": f"tweet-{self.counter}"}}
+
+
+def _publish_headers(token: str, internal_key: str = "test-internal-publish-key") -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "X-RevFirst-Internal-Key": internal_key,
+    }
 
 
 def _build_sqlite_session_factory():
@@ -79,6 +87,8 @@ def test_publish_reply_success_creates_audit_usage_and_cooldown(monkeypatch) -> 
     monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
     monkeypatch.setenv("PUBLISH_THREAD_COOLDOWN_MINUTES", "60")
     monkeypatch.setenv("PUBLISH_AUTHOR_COOLDOWN_MINUTES", "45")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
     get_settings.cache_clear()
     get_token_key.cache_clear()
 
@@ -112,7 +122,7 @@ def test_publish_reply_success_creates_audit_usage_and_cooldown(monkeypatch) -> 
                 "thread_id": "190000000000000700",
                 "target_author_id": "100099",
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_publish_headers(token),
         )
         assert publish_response.status_code == 200
         payload = publish_response.json()
@@ -151,6 +161,8 @@ def test_publish_reply_is_blocked_by_thread_cooldown(monkeypatch) -> None:
     monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
     monkeypatch.setenv("PUBLISH_THREAD_COOLDOWN_MINUTES", "120")
     monkeypatch.setenv("PUBLISH_AUTHOR_COOLDOWN_MINUTES", "120")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
     get_settings.cache_clear()
     get_token_key.cache_clear()
 
@@ -184,7 +196,7 @@ def test_publish_reply_is_blocked_by_thread_cooldown(monkeypatch) -> None:
                 "thread_id": "190000000000000701",
                 "target_author_id": "200001",
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_publish_headers(token),
         )
         assert first.status_code == 200
 
@@ -197,7 +209,7 @@ def test_publish_reply_is_blocked_by_thread_cooldown(monkeypatch) -> None:
                 "thread_id": "190000000000000701",
                 "target_author_id": "200001",
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_publish_headers(token),
         )
         assert second.status_code == 409
         assert "cooldown" in second.json()["detail"].lower()
@@ -225,6 +237,8 @@ def test_publish_reply_is_blocked_by_thread_cooldown(monkeypatch) -> None:
 
 def test_publish_post_blocks_when_plan_limit_exceeded(monkeypatch) -> None:
     monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
     get_settings.cache_clear()
     get_token_key.cache_clear()
 
@@ -255,7 +269,7 @@ def test_publish_post_blocks_when_plan_limit_exceeded(monkeypatch) -> None:
                 "workspace_id": workspace_id,
                 "text": "Daily post 1 for builders.",
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_publish_headers(token),
         )
         assert first.status_code == 200
 
@@ -265,7 +279,7 @@ def test_publish_post_blocks_when_plan_limit_exceeded(monkeypatch) -> None:
                 "workspace_id": workspace_id,
                 "text": "Daily post 2 should hit free-plan limit.",
             },
-            headers={"Authorization": f"Bearer {token}"},
+            headers=_publish_headers(token),
         )
         assert second.status_code == 409
         assert "limit" in second.json()["detail"].lower()
@@ -289,3 +303,395 @@ def test_publish_post_blocks_when_plan_limit_exceeded(monkeypatch) -> None:
         api_main.app.dependency_overrides.clear()
         get_token_key.cache_clear()
         get_settings.cache_clear()
+
+
+def test_publish_post_is_blocked_when_direct_api_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "false")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"publish-disabled-{uuid.uuid4()}",
+            owner_email="publish-disabled-owner@revfirst.io",
+            owner_password="publish-disabled-pass-123",
+        )
+
+        response = client.post(
+            "/publishing/post",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Should be blocked when direct API disabled.",
+            },
+            headers=_publish_headers(token),
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "direct_publish_api_disabled"
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_post_is_blocked_when_internal_key_missing(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"publish-missing-key-{uuid.uuid4()}",
+            owner_email="publish-missing-key-owner@revfirst.io",
+            owner_password="publish-missing-key-pass-123",
+        )
+
+        response = client.post(
+            "/publishing/post",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Should be blocked without internal key.",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "invalid_internal_publish_key"
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_post_is_blocked_for_member_role(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, owner_token = _bootstrap_workspace(
+            client,
+            workspace_name=f"publish-member-{uuid.uuid4()}",
+            owner_email="publish-member-owner@revfirst.io",
+            owner_password="publish-member-pass-123",
+        )
+        assert owner_token
+
+        member_email = "workspace-member@revfirst.io"
+        member_password = "workspace-member-pass-123"
+        with session_factory() as seed_session:
+            member_role = seed_session.scalar(select(Role).where(Role.name == "member"))
+            assert member_role is not None
+
+            member = User(
+                id=str(uuid.uuid4()),
+                email=member_email,
+                password_hash=hash_password(member_password),
+                is_active=True,
+            )
+            seed_session.add(member)
+            seed_session.flush()
+            seed_session.add(
+                WorkspaceUser(
+                    id=str(uuid.uuid4()),
+                    workspace_id=workspace_id,
+                    user_id=member.id,
+                    role_id=member_role.id,
+                )
+            )
+            seed_session.commit()
+
+        member_login = client.post(
+            "/auth/login",
+            json={
+                "email": member_email,
+                "password": member_password,
+                "workspace_id": workspace_id,
+            },
+        )
+        assert member_login.status_code == 200
+        member_token = member_login.json()["access_token"]
+
+        response = client.post(
+            "/publishing/post",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Member role should not publish directly.",
+            },
+            headers=_publish_headers(member_token),
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Insufficient role"
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_reply_is_blocked_when_direct_api_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "false")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"reply-disabled-{uuid.uuid4()}",
+            owner_email="reply-disabled-owner@revfirst.io",
+            owner_password="reply-disabled-pass-123",
+        )
+
+        response = client.post(
+            "/publishing/reply",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Should be blocked when direct API disabled.",
+                "in_reply_to_tweet_id": "190000000000000811",
+                "thread_id": "190000000000000811",
+                "target_author_id": "555001",
+            },
+            headers=_publish_headers(token),
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "direct_publish_api_disabled"
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_reply_is_blocked_when_internal_key_missing(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"reply-missing-key-{uuid.uuid4()}",
+            owner_email="reply-missing-key-owner@revfirst.io",
+            owner_password="reply-missing-key-pass-123",
+        )
+
+        response = client.post(
+            "/publishing/reply",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Should be blocked without internal key.",
+                "in_reply_to_tweet_id": "190000000000000812",
+                "thread_id": "190000000000000812",
+                "target_author_id": "555002",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "invalid_internal_publish_key"
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_reply_success_increments_replies_published_metric_once(monkeypatch) -> None:
+    reset_metrics_for_tests()
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"reply-metric-success-{uuid.uuid4()}",
+            owner_email="reply-metric-success-owner@revfirst.io",
+            owner_password="reply-metric-success-pass-123",
+        )
+
+        response = client.post(
+            "/publishing/reply",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Successful reply should increment metric once.",
+                "in_reply_to_tweet_id": "190000000000000821",
+                "thread_id": "190000000000000821",
+                "target_author_id": "556001",
+            },
+            headers=_publish_headers(token),
+        )
+        assert response.status_code == 200
+
+        metrics_response = client.get("/metrics")
+        assert metrics_response.status_code == 200
+        assert (
+            f'revfirst_replies_published_total{{workspace_id="{workspace_id}"}} 1'
+            in metrics_response.text
+        )
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+        reset_metrics_for_tests()
+
+
+def test_publish_reply_author_cooldown_does_not_increment_replies_published_metric(monkeypatch) -> None:
+    reset_metrics_for_tests()
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISH_THREAD_COOLDOWN_MINUTES", "120")
+    monkeypatch.setenv("PUBLISH_AUTHOR_COOLDOWN_MINUTES", "120")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"reply-metric-author-cooldown-{uuid.uuid4()}",
+            owner_email="reply-metric-author-cooldown-owner@revfirst.io",
+            owner_password="reply-metric-author-cooldown-pass-123",
+        )
+
+        first = client.post(
+            "/publishing/reply",
+            json={
+                "workspace_id": workspace_id,
+                "text": "First reply should publish.",
+                "in_reply_to_tweet_id": "190000000000000831",
+                "thread_id": "190000000000000831",
+                "target_author_id": "556101",
+            },
+            headers=_publish_headers(token),
+        )
+        assert first.status_code == 200
+
+        second = client.post(
+            "/publishing/reply",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Second reply same author should be blocked.",
+                "in_reply_to_tweet_id": "190000000000000832",
+                "thread_id": "190000000000000832",
+                "target_author_id": "556101",
+            },
+            headers=_publish_headers(token),
+        )
+        assert second.status_code == 409
+        assert "cooldown" in second.json()["detail"].lower()
+
+        metrics_response = client.get("/metrics")
+        assert metrics_response.status_code == 200
+        assert (
+            f'revfirst_replies_published_total{{workspace_id="{workspace_id}"}} 1'
+            in metrics_response.text
+        )
+        assert (
+            f'revfirst_reply_blocked_total{{workspace_id="{workspace_id}",reason="author_cooldown"}} 1'
+            in metrics_response.text
+        )
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+        reset_metrics_for_tests()
