@@ -19,6 +19,7 @@ def handle(context: "CommandContext") -> ControlResponse:
         "/mode set <manual|semi_autonomous|autonomous_limited|containment> [confirm]",
         "/stability",
         "/stability contain",
+        "/ack_kill_switch",
         "/metrics",
         "/growth",
         "/growth_weekly",

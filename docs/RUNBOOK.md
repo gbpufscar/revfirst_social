@@ -26,6 +26,11 @@ Operational mode policy:
 - Change mode (owner/admin): `/mode set <manual|semi_autonomous|autonomous_limited|containment> [confirm]`
 - `manual` and `containment` disable scheduler execution.
 
+Stability guard v2:
+- Run diagnostics + auto-containment: `/stability`
+- Force manual containment (owner/admin): `/stability contain`
+- If kill-switch global is auto-activated, owner extends TTL with `/ack_kill_switch`.
+
 ## 3. Quick Health Checks
 
 ```bash

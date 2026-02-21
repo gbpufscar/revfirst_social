@@ -61,6 +61,7 @@ COMMAND_ROLE_MATRIX: Dict[str, Set[str]] = {
     "channel": {"owner", "admin"},
     "limit": {"owner", "admin"},
     "seed": {"owner", "admin", "member"},
+    "ack_kill_switch": {"owner"},
     "strategy_scan": {"owner", "admin"},
     "strategy_discover": {"owner", "admin"},
 }

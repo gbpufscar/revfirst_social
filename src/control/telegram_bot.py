@@ -70,6 +70,8 @@ def _render_queue_reply(data: Dict[str, Any]) -> str:
 def _render_status_reply(data: Dict[str, Any]) -> str:
     mode = str(data.get("mode") or "semi_autonomous")
     paused = bool(data.get("paused"))
+    global_kill_switch = bool(data.get("global_kill_switch"))
+    global_kill_ttl = data.get("global_kill_switch_ttl_seconds")
     channels = data.get("channels") if isinstance(data.get("channels"), dict) else {}
     enabled_channels = sorted([name for name, is_enabled in channels.items() if bool(is_enabled)])
     last_runs = data.get("last_runs") if isinstance(data.get("last_runs"), dict) else {}
@@ -83,6 +85,8 @@ def _render_status_reply(data: Dict[str, Any]) -> str:
         "Status do workspace:\n"
         f"- Modo operacional: {mode}\n"
         f"- Pausado: {'sim' if paused else 'nao'}\n"
+        f"- Kill-switch global: {'ativo' if global_kill_switch else 'inativo'}"
+        f"{' (ttl=' + str(global_kill_ttl) + 's)' if global_kill_ttl is not None else ''}\n"
         f"- Canais ativos: {', '.join(enabled_channels) if enabled_channels else 'nenhum'}\n"
         f"- Ultimo run: {last_run_summary}\n"
         "Proxima acao: use /queue para revisar pendencias."
@@ -127,6 +131,11 @@ def _render_stability_reply(data: Dict[str, Any], *, containment_mode: bool = Fa
             lines.append(f"- Contencao aplicada: {', '.join(str(value) for value in actions_applied)}")
         else:
             lines.append("- Contencao aplicada: nenhuma")
+
+    kill_switch_action = data.get("kill_switch_action") if isinstance(data.get("kill_switch_action"), dict) else {}
+    if kill_switch_action.get("applied"):
+        ttl_seconds = kill_switch_action.get("ttl_seconds")
+        lines.append(f"- Kill-switch global: ativado (ttl={ttl_seconds}s)")
 
     if recommended_actions:
         lines.append(f"Acao sugerida: {str(recommended_actions[0])}")
@@ -350,6 +359,10 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
         body = "Uso: /mode ou /mode set <modo> [confirm]."
     elif response.message == "stability_report_ok":
         body = _render_stability_reply(data, containment_mode=False)
+    elif response.message == "stability_auto_containment_applied":
+        body = _render_stability_reply(data, containment_mode=True)
+    elif response.message == "stability_kill_switch_applied":
+        body = _render_stability_reply(data, containment_mode=True)
     elif response.message == "stability_containment_applied":
         body = _render_stability_reply(data, containment_mode=True)
     elif response.message == "stability_containment_not_required":
@@ -358,6 +371,16 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
         body = "Contencao do stability guard exige owner/admin."
     elif response.message == "stability_invalid_args":
         body = "Uso: /stability ou /stability contain."
+    elif response.message == "kill_switch_acknowledged":
+        body = (
+            "Kill-switch global reconhecido.\n"
+            f"- TTL estendido para: {data.get('ttl_seconds')}s\n"
+            "Proxima acao: corrigir causas-raiz antes de retomar operacao."
+        )
+    elif response.message == "kill_switch_not_enabled":
+        body = "Kill-switch global nao esta ativo no momento."
+    elif response.message == "kill_switch_requires_owner":
+        body = "Apenas owner pode reconhecer o kill-switch global."
     elif response.message == "pipeline_executed":
         body = _render_pipeline_reply(data)
     elif response.message == "preview_ready":

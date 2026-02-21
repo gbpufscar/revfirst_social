@@ -19,6 +19,8 @@ from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
 from src.integrations.x.service import get_workspace_x_access_token
 from src.integrations.x.x_client import XClient
 from src.media.service import generate_image_asset
+from src.operations.stability_guard_agent import run_workspace_stability_guard_cycle
+from src.storage.redis_client import get_client as get_redis_client
 from src.storage.models import ApprovalQueueItem, DailyPostDraft, WorkspaceEvent
 from src.strategy.x_growth_strategy_agent import run_workspace_strategy_discovery, run_workspace_strategy_scan
 
@@ -438,6 +440,33 @@ def run_workspace_pipeline(
     """Run one workspace pipeline iteration without cross-tenant state."""
 
     settings = get_settings()
+    stability_guard: Dict[str, Any] = {"status": "disabled"}
+    if settings.stability_guard_scheduler_checks_enabled:
+        try:
+            stability_guard = run_workspace_stability_guard_cycle(
+                session,
+                workspace_id=workspace_id,
+                redis_client=get_redis_client(),
+                actor_user_id=None,
+                trigger="scheduler",
+            )
+        except Exception as exc:
+            stability_guard = {"status": "failed", "error": str(exc)}
+
+    containment = stability_guard.get("containment") if isinstance(stability_guard.get("containment"), dict) else {}
+    kill_switch_action = (
+        stability_guard.get("kill_switch_action") if isinstance(stability_guard.get("kill_switch_action"), dict) else {}
+    )
+    if containment.get("actions_applied") or kill_switch_action.get("applied"):
+        return {
+            "status": "skipped",
+            "reason": "stability_containment_applied",
+            "ingested": 0,
+            "evaluated_candidates": 0,
+            "eligible_reply_candidates": 0,
+            "stability_guard": stability_guard,
+        }
+
     access_token = get_workspace_x_access_token(session, workspace_id=workspace_id)
     if access_token is None:
         return {
@@ -446,6 +475,7 @@ def run_workspace_pipeline(
             "ingested": 0,
             "evaluated_candidates": 0,
             "eligible_reply_candidates": 0,
+            "stability_guard": stability_guard,
         }
 
     ingestion = run_open_calls_ingestion(
@@ -594,4 +624,5 @@ def run_workspace_pipeline(
         "growth_agent": growth_agent,
         "strategy_discovery_agent": strategy_discovery_agent,
         "strategy_agent": strategy_agent,
+        "stability_guard": stability_guard,
     }

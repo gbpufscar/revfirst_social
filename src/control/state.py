@@ -58,11 +58,28 @@ def is_global_kill_switch(redis_client: Redis) -> bool:
     return str(value).strip().lower() == "true"
 
 
-def set_global_kill_switch(redis_client: Redis, *, enabled: bool) -> None:
+def set_global_kill_switch(redis_client: Redis, *, enabled: bool, ttl_seconds: int | None = None) -> None:
     if enabled:
-        redis_client.set(global_kill_switch_key(), "true")
+        ttl = int(ttl_seconds or 0)
+        if ttl > 0:
+            redis_client.set(global_kill_switch_key(), "true", ex=max(1, ttl))
+        else:
+            redis_client.set(global_kill_switch_key(), "true")
         return
     redis_client.delete(global_kill_switch_key())
+
+
+def global_kill_switch_ttl_seconds(redis_client: Redis) -> int | None:
+    ttl_fn = getattr(redis_client, "ttl", None)
+    if not callable(ttl_fn):
+        return None
+    try:
+        value = int(ttl_fn(global_kill_switch_key()))
+    except Exception:
+        return None
+    if value < 0:
+        return None
+    return value
 
 
 def is_workspace_paused(redis_client: Redis, *, workspace_id: str) -> bool:

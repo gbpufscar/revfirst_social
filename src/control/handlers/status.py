@@ -15,7 +15,7 @@ from src.control.services import (
     latest_pipeline_runs,
     parse_channels,
 )
-from src.control.state import is_global_kill_switch, is_workspace_paused
+from src.control.state import global_kill_switch_ttl_seconds, is_global_kill_switch, is_workspace_paused
 from src.core.runtime import load_runtime_config
 from src.storage.models import AdminAction, PipelineRun, PublishAuditLog
 
@@ -144,6 +144,7 @@ def handle(context: "CommandContext") -> ControlResponse:
         "primary_workspace_id": runtime.primary_workspace_id,
         "paused": bool(settings.is_paused) or paused_redis,
         "global_kill_switch": global_kill,
+        "global_kill_switch_ttl_seconds": global_kill_switch_ttl_seconds(context.redis_client),
         "channels": parse_channels(settings),
         "last_runs": _latest_pipeline_summary(runs),
         "active_locks": active_locks,

@@ -32,6 +32,7 @@ Last Updated: 2026-02-19
 | `/limit replies\|posts <n>` | yes | yes | no | Temporary override with TTL |
 | `/seed <text>` | yes | yes | yes | Seed ingestion + interpretation |
 | `/stability contain` | yes | yes | no | Apply containment action when status is critical (pause workspace) |
+| `/ack_kill_switch` | yes | no | no | Extends global kill-switch TTL after explicit owner acknowledgement |
 
 ## Security Rules
 

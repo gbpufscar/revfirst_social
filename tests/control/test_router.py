@@ -134,8 +134,8 @@ def test_control_router_returns_unknown_command(monkeypatch, tmp_path) -> None:
 def test_control_router_stability_report(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         stability_handler_module,
-        "build_workspace_stability_report",
-        lambda session, *, workspace_id, redis_client: {  # noqa: ARG005
+        "run_workspace_stability_guard_cycle",
+        lambda session, *, workspace_id, redis_client, actor_user_id=None, trigger="telegram": {  # noqa: ARG005
             "workspace_id": workspace_id,
             "overall_status": "warning",
             "critical_count": 0,
@@ -143,6 +143,8 @@ def test_control_router_stability_report(monkeypatch, tmp_path) -> None:
             "checks": [],
             "recommended_actions": ["Validar scheduler."],
             "containment_recommended": False,
+            "containment": {"actions_applied": []},
+            "kill_switch_action": {"applied": False},
         },
     )
 
@@ -187,12 +189,12 @@ def test_control_router_stability_containment(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         stability_handler_module,
         "apply_stability_containment",
-        lambda session, *, workspace_id, redis_client, report: {  # noqa: ARG005
+        lambda session, *, workspace_id, redis_client, report, actor_user_id, trigger: {  # noqa: ARG005
             "requested": True,
             "overall_status": "critical",
             "containment_recommended": True,
             "already_paused": False,
-            "actions_applied": ["workspace_paused"],
+            "actions_applied": ["workspace_paused", "mode_containment"],
         },
     )
 
@@ -216,6 +218,43 @@ def test_control_router_stability_containment(monkeypatch, tmp_path) -> None:
         assert payload["accepted"] is True
         assert payload["message"] == "stability_containment_applied"
         assert "workspace_paused" in payload["data"]["actions_applied"]
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_ack_kill_switch(monkeypatch, tmp_path) -> None:
+    import src.control.handlers.kill_switch as kill_switch_handler_module
+
+    monkeypatch.setattr(
+        kill_switch_handler_module,
+        "ack_global_kill_switch",
+        lambda session, *, workspace_id, redis_client, actor_user_id: {  # noqa: ARG005
+            "acknowledged": True,
+            "enabled": True,
+            "ttl_seconds": 21600,
+        },
+    )
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 2105,
+                "message": {
+                    "message_id": 706,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/ack_kill_switch",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "kill_switch_acknowledged"
+        assert payload["data"]["ttl_seconds"] == 21600
     finally:
         teardown_control_test_context()
 

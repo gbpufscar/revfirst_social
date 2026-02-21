@@ -59,6 +59,7 @@ def parse_command(text: str) -> Optional[ControlCommand]:
         "status",
         "mode",
         "stability",
+        "ack_kill_switch",
         "metrics",
         "growth",
         "growth_weekly",
