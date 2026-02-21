@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     scheduler_max_workspaces_per_run: int = 50
     scheduler_candidate_evaluation_limit: int = 5
     telegram_webhook_secret: str = ""
+    telegram_bot_token: str = ""
     telegram_seed_max_text_chars: int = 1200
     daily_post_seed_limit: int = 10
     daily_post_default_topic: str = "builder growth"
