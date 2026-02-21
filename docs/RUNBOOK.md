@@ -33,6 +33,12 @@ Stability guard v2:
 - Se `TELEGRAM_BOT_TOKEN` estiver ausente ou `allowed_telegram_ids` vazio, o sistema marca
   `notification channel degraded` no stability guard e `/status` exibe `Telegram: DEGRADED`.
 
+Publishing circuit breakers (Fase 3):
+- `MAX_REPLIES_PER_HOUR` limita replies por workspace na janela UTC de 1h (`0` desativa).
+- `MAX_CONSECUTIVE_PUBLISH_FAILURES` ativa breaker de falhas seguidas (`0` desativa).
+- Ao atingir o breaker, o workspace entra em contenção (`paused=true` + `mode=containment`) e alerta Telegram é enviado.
+- Saída operacional: owner pode publicar com override após diagnóstico (`/approve <queue_id> override`).
+
 ## 3. Quick Health Checks
 
 ```bash

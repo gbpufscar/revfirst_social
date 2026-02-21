@@ -88,6 +88,10 @@ def handle(context: "CommandContext") -> ControlResponse:
             blocked_counter["plan_limit"] += 1
         elif row.status == "blocked_cooldown":
             blocked_counter["cooldown"] += 1
+        elif row.status == "blocked_rate_limit":
+            blocked_counter["hour_quota"] += 1
+        elif row.status == "blocked_circuit_breaker":
+            blocked_counter["circuit_breaker"] += 1
 
     latest_daily_post = context.session.scalar(
         select(DailyPostDraft)

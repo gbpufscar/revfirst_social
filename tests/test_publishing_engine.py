@@ -10,7 +10,8 @@ from sqlalchemy.orm import sessionmaker
 import src.api.main as api_main
 from src.core.config import get_settings
 from src.core.metrics import reset_metrics_for_tests
-from src.integrations.x.x_client import get_x_client
+import src.publishing.service as publishing_service
+from src.integrations.x.x_client import XClientError, get_x_client
 from src.storage.db import Base, get_session, load_models
 from src.storage.models import (
     PublishAuditLog,
@@ -32,6 +33,40 @@ class _FakePublisherXClient:
         del access_token, text, in_reply_to_tweet_id
         self.counter += 1
         return {"data": {"id": f"tweet-{self.counter}"}}
+
+
+class _FailingPublisherXClient:
+    def create_tweet(self, *, access_token: str, text: str, in_reply_to_tweet_id: str | None = None):
+        del access_token, text, in_reply_to_tweet_id
+        raise XClientError("forced_publish_failure")
+
+
+class _FakeCounterRedis:
+    def __init__(self) -> None:
+        self._store: dict[str, int] = {}
+
+    def get(self, key: str):
+        value = self._store.get(key)
+        return None if value is None else str(value)
+
+    def set(self, key: str, value: str, nx: bool = False, ex: int | None = None):
+        del ex
+        if nx and key in self._store:
+            return False
+        self._store[key] = int(value) if str(value).isdigit() else 0
+        return True
+
+    def delete(self, key: str):
+        return 1 if self._store.pop(key, None) is not None else 0
+
+    def incr(self, key: str):
+        value = int(self._store.get(key, 0)) + 1
+        self._store[key] = value
+        return value
+
+    def expire(self, key: str, seconds: int):
+        del key, seconds
+        return True
 
 
 def _publish_headers(token: str, internal_key: str = "test-internal-publish-key") -> dict[str, str]:
@@ -237,6 +272,160 @@ def test_publish_reply_is_blocked_by_thread_cooldown(monkeypatch) -> None:
             )
             assert usage is not None
             assert usage.count == 1
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_reply_is_blocked_by_hourly_quota(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISH_THREAD_COOLDOWN_MINUTES", "1")
+    monkeypatch.setenv("PUBLISH_AUTHOR_COOLDOWN_MINUTES", "1")
+    monkeypatch.setenv("MAX_REPLIES_PER_HOUR", "1")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+    fake_redis = _FakeCounterRedis()
+    monkeypatch.setattr(publishing_service, "get_redis_client", lambda: fake_redis)
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"publish-hourly-quota-{uuid.uuid4()}",
+            owner_email="hourly-quota-owner@revfirst.io",
+            owner_password="hourly-quota-owner-pass-123",
+        )
+
+        first = client.post(
+            "/publishing/reply",
+            json={
+                "workspace_id": workspace_id,
+                "text": "First reply should publish.",
+                "in_reply_to_tweet_id": "190000000000001001",
+                "thread_id": "190000000000001001",
+                "target_author_id": "900001",
+            },
+            headers=_publish_headers(token),
+        )
+        assert first.status_code == 200
+
+        second = client.post(
+            "/publishing/reply",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Second reply in same hour should be blocked by quota.",
+                "in_reply_to_tweet_id": "190000000000001002",
+                "thread_id": "190000000000001002",
+                "target_author_id": "900002",
+            },
+            headers=_publish_headers(token),
+        )
+        assert second.status_code == 409
+        assert "quota" in second.json()["detail"].lower()
+
+        with session_factory() as verify_session:
+            logs = verify_session.scalars(
+                select(PublishAuditLog).where(PublishAuditLog.workspace_id == workspace_id)
+            ).all()
+            assert len(logs) == 2
+            assert any(log.status == "blocked_rate_limit" for log in logs)
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_post_consecutive_failures_trigger_circuit_breaker(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("MAX_CONSECUTIVE_PUBLISH_FAILURES", "2")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FailingPublisherXClient()
+    fake_redis = _FakeCounterRedis()
+    monkeypatch.setattr(publishing_service, "get_redis_client", lambda: fake_redis)
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"publish-breaker-{uuid.uuid4()}",
+            owner_email="publish-breaker-owner@revfirst.io",
+            owner_password="publish-breaker-owner-pass-123",
+        )
+
+        first = client.post(
+            "/publishing/post",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Attempt 1 must fail.",
+            },
+            headers=_publish_headers(token),
+        )
+        assert first.status_code == 502
+
+        second = client.post(
+            "/publishing/post",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Attempt 2 must fail and trigger breaker.",
+            },
+            headers=_publish_headers(token),
+        )
+        assert second.status_code == 502
+
+        third = client.post(
+            "/publishing/post",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Attempt 3 must be blocked by breaker/containment.",
+            },
+            headers=_publish_headers(token),
+        )
+        assert third.status_code == 409
+        detail = third.json()["detail"].lower()
+        assert "operational mode" in detail or "circuit breaker" in detail
+
+        with session_factory() as verify_session:
+            control_setting = verify_session.scalar(
+                select(WorkspaceControlSetting).where(WorkspaceControlSetting.workspace_id == workspace_id)
+            )
+            assert control_setting is not None
+            assert control_setting.operational_mode == "containment"
+            assert control_setting.is_paused is True
+
+            logs = verify_session.scalars(
+                select(PublishAuditLog).where(PublishAuditLog.workspace_id == workspace_id)
+            ).all()
+            assert len(logs) >= 3
+            assert any(log.status == "failed" for log in logs)
     finally:
         api_main.app.dependency_overrides.clear()
         get_token_key.cache_clear()
