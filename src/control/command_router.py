@@ -61,6 +61,7 @@ _HANDLER_MAP: Dict[str, Handler] = {
     "queue": queue.handle,
     "preview": preview.handle,
     "approve": approve.handle,
+    "approve_now": approve.handle_now,
     "reject": approve.handle_reject,
     "pause": pause.handle,
     "resume": pause.handle_resume,

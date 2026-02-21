@@ -578,7 +578,7 @@ class ApprovalQueueItem(Base):
         nullable=False,
     )
     item_type: Mapped[str] = mapped_column(String(24), nullable=False)
-    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending_review")
     content_text: Mapped[str] = mapped_column(Text, nullable=False)
     source_kind: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     source_ref_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
@@ -591,6 +591,9 @@ class ApprovalQueueItem(Base):
         nullable=True,
     )
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_for: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    publish_window_key: Mapped[Optional[str]] = mapped_column(String(24), nullable=True)
+    editorial_priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rejected_by_user_id: Mapped[Optional[str]] = mapped_column(
         String(36),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -615,6 +618,12 @@ class ApprovalQueueItem(Base):
         UniqueConstraint("workspace_id", "idempotency_key", name="uq_approval_queue_workspace_idempotency"),
         Index("ix_approval_queue_items_workspace_created_at", "workspace_id", "created_at"),
         Index("ix_approval_queue_items_workspace_status_created_at", "workspace_id", "status", "created_at"),
+        Index(
+            "ix_approval_queue_items_workspace_status_scheduled_for",
+            "workspace_id",
+            "status",
+            "scheduled_for",
+        ),
     )
 
 

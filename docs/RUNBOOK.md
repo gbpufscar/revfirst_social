@@ -21,6 +21,14 @@ Scheduler command policy:
 - Canonical command: `python -m src.orchestrator.manager`
 - Do not use legacy command under the `orchestrator` package.
 
+Editorial queue model (canonical):
+- `pending_review`: aguardando revisão humana.
+- `approved_scheduled`: aprovado e agendado para janela UTC fixa.
+- `publishing` -> `published|failed`: execução de publicação.
+- `rejected`: item recusado no fluxo editorial.
+- Comando padrão de revisão: `/approve <queue_id>` (agenda).
+- Publicação imediata excepcional: `/approve_now <queue_id> [override]`.
+
 Operational mode policy:
 - Check current mode via Telegram: `/mode`
 - Change mode (owner/admin): `/mode set <manual|semi_autonomous|autonomous_limited|containment> [confirm]`

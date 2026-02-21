@@ -56,7 +56,7 @@ def _seed_reporting_rows(context) -> None:
                 id=str(uuid.uuid4()),
                 workspace_id=context.workspace_id,
                 item_type="reply",
-                status="pending",
+                status="pending_review",
                 content_text="Queue sample",
                 source_kind="test",
                 source_ref_id="sample",

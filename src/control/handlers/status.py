@@ -11,6 +11,7 @@ from src.control.command_schema import ControlResponse
 from src.control.formatters import format_recent_errors
 from src.control.security import get_telegram_notification_channel_status
 from src.control.services import (
+    editorial_stock_snapshot,
     get_or_create_control_setting,
     get_workspace_operational_mode,
     latest_pipeline_runs,
@@ -150,6 +151,7 @@ def handle(context: "CommandContext") -> ControlResponse:
         "telegram_status": "DEGRADED" if telegram_channel.degraded else "HEALTHY",
         "telegram_degraded_reasons": sorted(telegram_channel.reasons),
         "channels": parse_channels(settings),
+        "editorial_stock": editorial_stock_snapshot(context.session, workspace_id=workspace_id),
         "last_runs": _latest_pipeline_summary(runs),
         "active_locks": active_locks,
         "recent_errors": format_recent_errors(_fetch_recent_errors(context)),

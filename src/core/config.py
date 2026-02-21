@@ -101,6 +101,10 @@ class Settings(BaseSettings):
     scheduler_auto_queue_replies_enabled: bool = True
     scheduler_auto_queue_daily_post_enabled: bool = True
     scheduler_daily_post_interval_hours: int = 24
+    daily_publish_windows_utc: str = "07:30,16:30,20:30"
+    posts_per_day_target: int = 3
+    max_regen_per_day: int = 3
+    max_pending_review: int = 6
     scheduler_growth_collection_enabled: bool = True
     scheduler_growth_collection_interval_hours: int = 24
     scheduler_strategy_scan_enabled: bool = True
@@ -199,6 +203,23 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("SCHEDULER_CANDIDATE_EVALUATION_LIMIT must be positive.")
     if settings.scheduler_daily_post_interval_hours <= 0:
         raise ValueError("SCHEDULER_DAILY_POST_INTERVAL_HOURS must be positive.")
+    if settings.posts_per_day_target <= 0:
+        raise ValueError("POSTS_PER_DAY_TARGET must be positive.")
+    if settings.max_regen_per_day <= 0:
+        raise ValueError("MAX_REGEN_PER_DAY must be positive.")
+    if settings.max_pending_review <= 0:
+        raise ValueError("MAX_PENDING_REVIEW must be positive.")
+    daily_publish_windows = [token.strip() for token in settings.daily_publish_windows_utc.split(",") if token.strip()]
+    if not daily_publish_windows:
+        raise ValueError("DAILY_PUBLISH_WINDOWS_UTC must contain at least one HH:MM value.")
+    for token in daily_publish_windows:
+        pieces = token.split(":")
+        if len(pieces) != 2:
+            raise ValueError("DAILY_PUBLISH_WINDOWS_UTC values must use HH:MM format.")
+        hour = int(pieces[0])
+        minute = int(pieces[1])
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError("DAILY_PUBLISH_WINDOWS_UTC values must be valid UTC times.")
     if settings.scheduler_growth_collection_interval_hours <= 0:
         raise ValueError("SCHEDULER_GROWTH_COLLECTION_INTERVAL_HOURS must be positive.")
     if settings.scheduler_strategy_scan_interval_hours <= 0:

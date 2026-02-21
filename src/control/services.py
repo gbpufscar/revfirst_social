@@ -7,9 +7,21 @@ import json
 from typing import Any, Dict, List, Optional
 import uuid
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
+from src.editorial.queue_states import (
+    APPROVED_SCHEDULED_STATUSES,
+    PENDING_REVIEW_STATUSES,
+    QUEUE_STATUS_APPROVED_SCHEDULED,
+    QUEUE_STATUS_FAILED,
+    QUEUE_STATUS_PENDING_REVIEW,
+    QUEUE_STATUS_PUBLISHED,
+    QUEUE_STATUS_PUBLISHING,
+    QUEUE_STATUS_REJECTED,
+)
+from src.editorial.windows import next_publish_window, parse_daily_publish_windows_utc
+from src.core.config import get_settings
 from src.storage.models import (
     AdminAction,
     ApprovalQueueItem,
@@ -68,6 +80,22 @@ def _json_load_dict(payload: str) -> Dict[str, Any]:
     if not isinstance(loaded, dict):
         return {}
     return loaded
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    parsed_text = normalized.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(parsed_text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def get_or_create_control_setting(session: Session, *, workspace_id: str) -> WorkspaceControlSetting:
@@ -277,6 +305,9 @@ def create_queue_item(
     opportunity_score: Optional[int],
     metadata: Optional[Dict[str, Any]] = None,
     idempotency_key: Optional[str] = None,
+    scheduled_for: Optional[datetime] = None,
+    publish_window_key: Optional[str] = None,
+    editorial_priority: int = 0,
 ) -> ApprovalQueueItem:
     normalized_type = item_type.strip().lower()
     if normalized_type not in _ALLOWED_QUEUE_TYPES:
@@ -293,18 +324,24 @@ def create_queue_item(
     if existing is not None:
         return existing
 
+    metadata_payload = metadata or {}
+    resolved_scheduled_for = scheduled_for or _parse_iso_datetime(metadata_payload.get("scheduled_for"))
+
     item = ApprovalQueueItem(
         id=str(uuid.uuid4()),
         workspace_id=workspace_id,
         item_type=normalized_type,
-        status="pending",
+        status=QUEUE_STATUS_PENDING_REVIEW,
         content_text=content_text,
         source_kind=source_kind,
         source_ref_id=source_ref_id,
         intent=intent,
         opportunity_score=opportunity_score,
-        metadata_json=_json_dumps(metadata or {}),
+        metadata_json=_json_dumps(metadata_payload),
         idempotency_key=idempotency_key,
+        scheduled_for=resolved_scheduled_for,
+        publish_window_key=publish_window_key,
+        editorial_priority=max(0, int(editorial_priority)),
     )
     session.add(item)
     session.commit()
@@ -326,7 +363,7 @@ def list_pending_queue_items(session: Session, *, workspace_id: str, limit: int 
         select(ApprovalQueueItem)
         .where(
             ApprovalQueueItem.workspace_id == workspace_id,
-            ApprovalQueueItem.status == "pending",
+            ApprovalQueueItem.status.in_(PENDING_REVIEW_STATUSES),
         )
         .order_by(desc(ApprovalQueueItem.created_at))
         .limit(safe_limit)
@@ -341,7 +378,7 @@ def mark_queue_item_rejected(
     rejected_by_user_id: str,
 ) -> ApprovalQueueItem:
     now = datetime.now(timezone.utc)
-    item.status = "rejected"
+    item.status = QUEUE_STATUS_REJECTED
     item.rejected_by_user_id = rejected_by_user_id
     item.rejected_at = now
     item.updated_at = now
@@ -354,11 +391,15 @@ def mark_queue_item_approved(
     *,
     item: ApprovalQueueItem,
     approved_by_user_id: str,
+    scheduled_for: datetime | None = None,
+    publish_window_key: str | None = None,
 ) -> ApprovalQueueItem:
     now = datetime.now(timezone.utc)
-    item.status = "approved"
+    item.status = QUEUE_STATUS_APPROVED_SCHEDULED
     item.approved_by_user_id = approved_by_user_id
     item.approved_at = now
+    item.scheduled_for = scheduled_for
+    item.publish_window_key = publish_window_key
     item.updated_at = now
     session.commit()
     return item
@@ -371,7 +412,7 @@ def mark_queue_item_publishing(
     approved_by_user_id: Optional[str] = None,
 ) -> ApprovalQueueItem:
     now = datetime.now(timezone.utc)
-    item.status = "publishing"
+    item.status = QUEUE_STATUS_PUBLISHING
     if approved_by_user_id:
         item.approved_by_user_id = approved_by_user_id
     if item.approved_at is None:
@@ -388,7 +429,7 @@ def mark_queue_item_published(
     external_post_id: Optional[str],
 ) -> ApprovalQueueItem:
     now = datetime.now(timezone.utc)
-    item.status = "published"
+    item.status = QUEUE_STATUS_PUBLISHED
     item.published_post_id = external_post_id
     item.error_message = None
     item.updated_at = now
@@ -403,7 +444,7 @@ def mark_queue_item_failed(
     error_message: str,
 ) -> ApprovalQueueItem:
     now = datetime.now(timezone.utc)
-    item.status = "failed"
+    item.status = QUEUE_STATUS_FAILED
     item.error_message = error_message[:255]
     item.updated_at = now
     session.commit()
@@ -412,6 +453,97 @@ def mark_queue_item_failed(
 
 def parse_queue_metadata(item: ApprovalQueueItem) -> Dict[str, Any]:
     return _json_load_dict(item.metadata_json)
+
+
+def schedule_queue_item_for_next_window(
+    session: Session,
+    *,
+    item: ApprovalQueueItem,
+    approved_by_user_id: str,
+    now_utc: datetime | None = None,
+) -> ApprovalQueueItem:
+    settings = get_settings()
+    now = now_utc or datetime.now(timezone.utc)
+
+    explicit = item.scheduled_for
+    if explicit is not None:
+        if explicit.tzinfo is None:
+            explicit = explicit.replace(tzinfo=timezone.utc)
+        else:
+            explicit = explicit.astimezone(timezone.utc)
+    if explicit is None:
+        explicit = _parse_iso_datetime(parse_queue_metadata(item).get("scheduled_for"))
+    if explicit is not None and explicit > now:
+        window_key = explicit.astimezone(timezone.utc).strftime("%Y%m%d-%H%M")
+        return mark_queue_item_approved(
+            session,
+            item=item,
+            approved_by_user_id=approved_by_user_id,
+            scheduled_for=explicit,
+            publish_window_key=window_key,
+        )
+
+    windows = parse_daily_publish_windows_utc(settings.daily_publish_windows_utc)
+    publish_window = next_publish_window(now, windows_utc=windows)
+    metadata = parse_queue_metadata(item)
+    metadata["scheduled_for"] = publish_window.scheduled_for.isoformat()
+    metadata["publish_window_key"] = publish_window.window_key
+    item.metadata_json = _json_dumps(metadata)
+    return mark_queue_item_approved(
+        session,
+        item=item,
+        approved_by_user_id=approved_by_user_id,
+        scheduled_for=publish_window.scheduled_for,
+        publish_window_key=publish_window.window_key,
+    )
+
+
+def editorial_stock_snapshot(
+    session: Session,
+    *,
+    workspace_id: str,
+    now_utc: datetime | None = None,
+) -> Dict[str, Any]:
+    settings = get_settings()
+    now = now_utc or datetime.now(timezone.utc)
+    windows = parse_daily_publish_windows_utc(settings.daily_publish_windows_utc)
+    next_window = next_publish_window(now, windows_utc=windows)
+
+    pending_count = int(
+        session.scalar(
+            select(func.count())
+            .select_from(ApprovalQueueItem)
+            .where(
+                ApprovalQueueItem.workspace_id == workspace_id,
+                ApprovalQueueItem.item_type == "post",
+                ApprovalQueueItem.status.in_(PENDING_REVIEW_STATUSES),
+            )
+        )
+        or 0
+    )
+    approved_count = int(
+        session.scalar(
+            select(func.count())
+            .select_from(ApprovalQueueItem)
+            .where(
+                ApprovalQueueItem.workspace_id == workspace_id,
+                ApprovalQueueItem.item_type == "post",
+                ApprovalQueueItem.status.in_(APPROVED_SCHEDULED_STATUSES),
+            )
+        )
+        or 0
+    )
+    posts_target = max(1, int(settings.posts_per_day_target))
+    coverage_days = round(approved_count / posts_target, 2)
+
+    return {
+        "pending_review_count": pending_count,
+        "approved_scheduled_count": approved_count,
+        "next_window_utc": next_window.scheduled_for.isoformat(),
+        "next_window_key": next_window.window_key,
+        "coverage_days": coverage_days,
+        "posts_per_day_target": posts_target,
+    }
 
 
 def create_pipeline_run(

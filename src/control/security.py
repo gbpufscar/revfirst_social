@@ -66,6 +66,7 @@ COMMAND_ROLE_MATRIX: Dict[str, Set[str]] = {
     "queue": {"owner", "admin", "member"},
     "preview": {"owner", "admin", "member"},
     "approve": {"owner", "admin"},
+    "approve_now": {"owner", "admin"},
     "reject": {"owner", "admin"},
     "pause": {"owner", "admin"},
     "resume": {"owner", "admin"},

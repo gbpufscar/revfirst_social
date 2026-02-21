@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from src.billing.plans import load_plans
 from src.control.command_schema import ControlResponse
-from src.control.services import get_or_create_control_setting, parse_channels
+from src.control.services import editorial_stock_snapshot, get_or_create_control_setting, parse_channels
+from src.editorial.queue_states import APPROVED_SCHEDULED_STATUSES, PENDING_REVIEW_STATUSES
 from src.storage.models import ApprovalQueueItem, DailyPostDraft, PublishAuditLog, Workspace, WorkspaceDailyUsage
 
 if TYPE_CHECKING:
@@ -73,6 +74,8 @@ def handle(context: "CommandContext") -> ControlResponse:
     ).all()
 
     queue_counter = Counter(item.status for item in queue_items)
+    pending_review_total = sum(int(queue_counter.get(status, 0)) for status in PENDING_REVIEW_STATUSES)
+    approved_scheduled_total = sum(int(queue_counter.get(status, 0)) for status in APPROVED_SCHEDULED_STATUSES)
     replies_generated = sum(1 for item in queue_items if item.item_type == "reply")
 
     publish_rows = context.session.scalars(
@@ -122,12 +125,15 @@ def handle(context: "CommandContext") -> ControlResponse:
             "published_today": int(usage_map.get("publish_instagram", 0)),
         },
         "queue": {
-            "pending": int(queue_counter.get("pending", 0)),
-            "approved": int(queue_counter.get("approved", 0)),
+            "pending_review": pending_review_total,
+            "approved_scheduled": approved_scheduled_total,
+            "pending": pending_review_total,
+            "approved": approved_scheduled_total,
             "published": int(queue_counter.get("published", 0)),
             "failed": int(queue_counter.get("failed", 0)),
             "rejected": int(queue_counter.get("rejected", 0)),
         },
+        "editorial_stock": editorial_stock_snapshot(context.session, workspace_id=workspace_id, now_utc=now),
         "plan_usage": _plan_usage(context, usage_map),
         "channels": parse_channels(control),
     }
