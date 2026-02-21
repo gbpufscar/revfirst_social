@@ -79,7 +79,7 @@ def publish_reply_endpoint(
         target_author_id=payload.target_author_id,
         x_client=x_client,
     )
-    if not result.published and result.status in {"blocked_plan", "blocked_cooldown"}:
+    if not result.published and result.status in {"blocked_plan", "blocked_cooldown", "blocked_mode"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=result.message,
@@ -117,7 +117,7 @@ def publish_post_endpoint(
         text=payload.text,
         x_client=x_client,
     )
-    if not result.published and result.status == "blocked_plan":
+    if not result.published and result.status in {"blocked_plan", "blocked_mode"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=result.message,

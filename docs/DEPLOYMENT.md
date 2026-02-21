@@ -34,10 +34,17 @@ Last Updated: 2026-02-20
 - `X_OAUTH_STATE_TTL_SECONDS=600`
 - `X_REQUIRED_PUBLISH_SCOPE=tweet.write`
 - `TELEGRAM_WEBHOOK_SECRET=...`
+- `TELEGRAM_BOT_TOKEN=...` (required for proactive alert delivery)
 - `TELEGRAM_ADMINS_FILE_PATH=/run/secrets/telegram_admins.yaml`
 - `APP_PUBLIC_BASE_URL=https://social.revfirst.cloud`
 - `PUBLISHING_DIRECT_API_ENABLED=false`
 - `PUBLISHING_DIRECT_API_INTERNAL_KEY=...`
+- `STABILITY_GUARD_SCHEDULER_CHECKS_ENABLED=true`
+- `STABILITY_AUTO_CONTAINMENT_ON_CRITICAL=true`
+- `STABILITY_KILL_SWITCH_ENABLED=true`
+- `STABILITY_KILL_SWITCH_CRITERIA_THRESHOLD=3`
+- `STABILITY_KILL_SWITCH_TTL_SECONDS=3600`
+- `STABILITY_KILL_SWITCH_ACK_TTL_SECONDS=21600`
 - `METRICS_ENABLED=true`
 - `IP_RATE_LIMIT_ENABLED=true`
 - `IP_RATE_LIMIT_REQUESTS_PER_WINDOW=120`
@@ -59,6 +66,9 @@ Do not use child nameserver setup for this subdomain scenario.
 
 ## Deploy Procedure
 
+0. Block deploy from dirty worktree:
+   - `git status --short` must be empty.
+   - If not empty, stop and commit or stash before any release.
 1. Confirm source branch is `main`.
 2. Save app config and environment variables.
 3. Validate secrets before redeploy:
@@ -87,6 +97,7 @@ curl -ik https://social.revfirst.cloud/metrics | head -n 30
 Expected:
 - All endpoints return `200`.
 - `/health` reports DB and Redis `ok=true`.
+- Telegram `/status` must show `mode` and match planned release mode.
 
 OAuth official account validation (X):
 

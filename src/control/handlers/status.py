@@ -9,8 +9,14 @@ from sqlalchemy import desc, select
 
 from src.control.command_schema import ControlResponse
 from src.control.formatters import format_recent_errors
-from src.control.services import get_or_create_control_setting, latest_pipeline_runs, parse_channels
-from src.control.state import is_global_kill_switch, is_workspace_paused
+from src.control.security import get_telegram_notification_channel_status
+from src.control.services import (
+    get_or_create_control_setting,
+    get_workspace_operational_mode,
+    latest_pipeline_runs,
+    parse_channels,
+)
+from src.control.state import global_kill_switch_ttl_seconds, is_global_kill_switch, is_workspace_paused
 from src.core.runtime import load_runtime_config
 from src.storage.models import AdminAction, PipelineRun, PublishAuditLog
 
@@ -126,13 +132,23 @@ def handle(context: "CommandContext") -> ControlResponse:
 
     paused_redis = is_workspace_paused(context.redis_client, workspace_id=workspace_id)
     global_kill = is_global_kill_switch(context.redis_client)
+    mode = get_workspace_operational_mode(
+        context.session,
+        workspace_id=workspace_id,
+        redis_client=context.redis_client,
+    )
+    telegram_channel = get_telegram_notification_channel_status()
 
     data = {
         "workspace_id": workspace_id,
+        "mode": mode,
         "single_workspace_mode": runtime.single_workspace_mode,
         "primary_workspace_id": runtime.primary_workspace_id,
         "paused": bool(settings.is_paused) or paused_redis,
         "global_kill_switch": global_kill,
+        "global_kill_switch_ttl_seconds": global_kill_switch_ttl_seconds(context.redis_client),
+        "telegram_status": "DEGRADED" if telegram_channel.degraded else "HEALTHY",
+        "telegram_degraded_reasons": sorted(telegram_channel.reasons),
         "channels": parse_channels(settings),
         "last_runs": _latest_pipeline_summary(runs),
         "active_locks": active_locks,

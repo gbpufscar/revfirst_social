@@ -39,16 +39,19 @@ _SUPPORTED_PIPELINES = {
 }
 
 
-def _parse_run_request(context: "CommandContext") -> tuple[str | None, bool]:
+def _parse_run_request(context: "CommandContext") -> tuple[str | None, bool, bool]:
     if not context.command.args:
-        return None, False
+        return None, False, False
     pipeline = context.command.args[0].strip().lower()
     dry_run = False
+    owner_override = False
     for token in context.command.args[1:]:
         normalized = token.strip().lower()
         if normalized in {"--dry-run", "dry_run=true", "dryrun=true"}:
             dry_run = True
-    return pipeline, dry_run
+        if normalized in {"override", "--override", "owner_override=true"} and context.actor.role == "owner":
+            owner_override = True
+    return pipeline, dry_run, owner_override
 
 
 def _parse_scheduled_for(metadata: Dict[str, Any]) -> datetime | None:
@@ -158,7 +161,7 @@ def _run_propose_replies(context: "CommandContext", *, dry_run: bool) -> Dict[st
     }
 
 
-def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[str, Any]:
+def _run_execute_approved(context: "CommandContext", *, dry_run: bool, owner_override: bool) -> Dict[str, Any]:
     workspace_id = context.envelope.workspace_id
     approved_items: List[ApprovalQueueItem] = list(
         context.session.scalars(
@@ -209,6 +212,7 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                     thread_id=(str(metadata.get("thread_id")) if metadata.get("thread_id") else None),
                     target_author_id=(str(metadata.get("target_author_id")) if metadata.get("target_author_id") else None),
                     x_client=context.x_client,
+                    owner_override=owner_override,
                 )
             elif item.item_type == "post":
                 result = publish_post(
@@ -216,6 +220,7 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                     workspace_id=workspace_id,
                     text=item.content_text,
                     x_client=context.x_client,
+                    owner_override=owner_override,
                 )
             elif item.item_type == "email":
                 recipients_raw = metadata.get("recipients")
@@ -233,6 +238,7 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                     recipients=recipients,
                     source_kind=item.source_kind,
                     source_ref_id=item.source_ref_id,
+                    owner_override=owner_override,
                 )
             elif item.item_type == "blog":
                 image_url = str(metadata.get("image_url") or "").strip()
@@ -244,6 +250,7 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                     image_url=(image_url or None),
                     source_kind=item.source_kind,
                     source_ref_id=item.source_ref_id,
+                    owner_override=owner_override,
                 )
             elif item.item_type == "instagram":
                 scheduled_for = _parse_scheduled_for(metadata)
@@ -258,6 +265,7 @@ def _run_execute_approved(context: "CommandContext", *, dry_run: bool) -> Dict[s
                     source_kind=item.source_kind,
                     source_ref_id=item.source_ref_id,
                     scheduled_for=(scheduled_for.isoformat() if scheduled_for is not None else None),
+                    owner_override=owner_override,
                 )
             else:
                 mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")
@@ -464,13 +472,19 @@ def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, An
     }
 
 
-def _execute_pipeline(context: "CommandContext", *, pipeline: str, dry_run: bool) -> Dict[str, Any]:
+def _execute_pipeline(
+    context: "CommandContext",
+    *,
+    pipeline: str,
+    dry_run: bool,
+    owner_override: bool,
+) -> Dict[str, Any]:
     if pipeline == "ingest_open_calls":
         return _run_ingest_open_calls(context, dry_run=dry_run)
     if pipeline == "propose_replies":
         return _run_propose_replies(context, dry_run=dry_run)
     if pipeline == "execute_approved":
-        return _run_execute_approved(context, dry_run=dry_run)
+        return _run_execute_approved(context, dry_run=dry_run, owner_override=owner_override)
     if pipeline == "daily_post":
         return _run_daily_post(context, dry_run=dry_run)
     raise ValueError("unsupported_pipeline")
@@ -478,7 +492,7 @@ def _execute_pipeline(context: "CommandContext", *, pipeline: str, dry_run: bool
 
 def handle(context: "CommandContext") -> ControlResponse:
     workspace_id = context.envelope.workspace_id
-    pipeline, dry_run = _parse_run_request(context)
+    pipeline, dry_run, owner_override = _parse_run_request(context)
     if not pipeline:
         return ControlResponse(
             success=False,
@@ -536,7 +550,12 @@ def handle(context: "CommandContext") -> ControlResponse:
     )
 
     try:
-        result = _execute_pipeline(context, pipeline=pipeline, dry_run=dry_run)
+        result = _execute_pipeline(
+            context,
+            pipeline=pipeline,
+            dry_run=dry_run,
+            owner_override=owner_override,
+        )
         finish_pipeline_run(
             context.session,
             run=run_row,

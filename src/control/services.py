@@ -16,6 +16,7 @@ from src.storage.models import (
     PipelineRun,
     WorkspaceControlSetting,
 )
+from src.control.state import get_workspace_mode_cached, set_workspace_mode_cached
 
 _DEFAULT_CHANNELS = {
     "x": True,
@@ -23,10 +24,36 @@ _DEFAULT_CHANNELS = {
     "blog": False,
     "instagram": False,
 }
+DEFAULT_OPERATIONAL_MODE = "semi_autonomous"
+VALID_OPERATIONAL_MODES = {
+    "manual",
+    "semi_autonomous",
+    "autonomous_limited",
+    "containment",
+}
 
 
 _ALLOWED_CHANNELS = set(_DEFAULT_CHANNELS.keys())
 _ALLOWED_QUEUE_TYPES = {"reply", "post", "email", "blog", "instagram"}
+
+
+def normalize_operational_mode(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in VALID_OPERATIONAL_MODES:
+        return normalized
+    return DEFAULT_OPERATIONAL_MODE
+
+
+def scheduler_enabled_for_mode(mode: str) -> bool:
+    normalized = normalize_operational_mode(mode)
+    return normalized in {"semi_autonomous", "autonomous_limited"}
+
+
+def publishing_allowed_for_mode(mode: str, *, owner_override: bool = False) -> bool:
+    normalized = normalize_operational_mode(mode)
+    if normalized == "containment":
+        return bool(owner_override)
+    return True
 
 
 def _json_dumps(payload: Dict[str, Any]) -> str:
@@ -50,12 +77,16 @@ def get_or_create_control_setting(session: Session, *, workspace_id: str) -> Wor
         )
     )
     if setting is not None:
+        setting.operational_mode = normalize_operational_mode(setting.operational_mode)
         return setting
 
+    now = datetime.now(timezone.utc)
     setting = WorkspaceControlSetting(
         id=str(uuid.uuid4()),
         workspace_id=workspace_id,
         is_paused=False,
+        operational_mode=DEFAULT_OPERATIONAL_MODE,
+        last_mode_change_at=now,
         channels_json=_json_dumps(dict(_DEFAULT_CHANNELS)),
     )
     session.add(setting)
@@ -97,6 +128,55 @@ def set_pause_state(session: Session, *, workspace_id: str, paused: bool) -> Wor
     setting.is_paused = bool(paused)
     setting.updated_at = datetime.now(timezone.utc)
     session.commit()
+    return setting
+
+
+def get_workspace_operational_mode(
+    session: Session,
+    *,
+    workspace_id: str,
+    redis_client: Any | None = None,
+) -> str:
+    if redis_client is not None:
+        cached = get_workspace_mode_cached(redis_client, workspace_id=workspace_id)
+        if cached in VALID_OPERATIONAL_MODES:
+            return cached
+
+    setting = get_or_create_control_setting(session, workspace_id=workspace_id)
+    mode = normalize_operational_mode(setting.operational_mode)
+    if setting.operational_mode != mode:
+        setting.operational_mode = mode
+        setting.updated_at = datetime.now(timezone.utc)
+        session.commit()
+
+    if redis_client is not None:
+        set_workspace_mode_cached(redis_client, workspace_id=workspace_id, mode=mode)
+    return mode
+
+
+def set_operational_mode(
+    session: Session,
+    *,
+    workspace_id: str,
+    mode: str,
+    changed_by_user_id: str | None,
+    redis_client: Any | None = None,
+) -> WorkspaceControlSetting:
+    normalized = str(mode or "").strip().lower()
+    if normalized not in VALID_OPERATIONAL_MODES:
+        raise ValueError("invalid_operational_mode")
+
+    setting = get_or_create_control_setting(session, workspace_id=workspace_id)
+    now = datetime.now(timezone.utc)
+    setting.operational_mode = normalized
+    setting.last_mode_change_at = now
+    setting.mode_changed_by_user_id = changed_by_user_id
+    setting.updated_at = now
+    session.commit()
+
+    if redis_client is not None:
+        set_workspace_mode_cached(redis_client, workspace_id=workspace_id, mode=normalized)
+
     return setting
 
 

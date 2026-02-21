@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from src.core.logger import get_logger
 from src.core.observability import capture_exception, sentry_scope
 from src.core.runtime import load_runtime_config
+from src.control.services import scheduler_enabled_for_mode
 from src.orchestrator.locks import WorkspaceLockManager
 from src.storage.models import Workspace, WorkspaceEvent
 from src.storage.tenant import reset_workspace_context, set_workspace_context
@@ -21,6 +22,7 @@ ACTIVE_WORKSPACE_STATUSES = ("active", "trialing")
 PipelineRunner = Callable[[Session, str], Mapping[str, Any]]
 WorkspacePauseChecker = Callable[[str], bool]
 GlobalKillSwitchChecker = Callable[[], bool]
+WorkspaceModeResolver = Callable[[str], str]
 
 logger = get_logger("revfirst.orchestrator.scheduler")
 
@@ -56,12 +58,14 @@ class WorkspaceScheduler:
         pipeline_runner: PipelineRunner,
         workspace_pause_checker: WorkspacePauseChecker | None = None,
         global_kill_switch_checker: GlobalKillSwitchChecker | None = None,
+        workspace_mode_resolver: WorkspaceModeResolver | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lock_manager = lock_manager
         self._pipeline_runner = pipeline_runner
         self._workspace_pause_checker = workspace_pause_checker or (lambda workspace_id: False)
         self._global_kill_switch_checker = global_kill_switch_checker or (lambda: False)
+        self._workspace_mode_resolver = workspace_mode_resolver or (lambda workspace_id: "semi_autonomous")
 
     def list_active_workspace_ids(self, *, limit: int | None = None) -> List[str]:
         runtime = load_runtime_config()
@@ -105,6 +109,14 @@ class WorkspaceScheduler:
             )
 
         for workspace_id in selected_ids:
+            workspace_mode = self._workspace_mode_resolver(workspace_id)
+            if not scheduler_enabled_for_mode(workspace_mode):
+                details = {"reason": "mode_blocks_scheduler", "mode": workspace_mode}
+                runs.append(WorkspaceRunSummary(workspace_id=workspace_id, status="skipped_mode", details=details))
+                self._record_scheduler_event(workspace_id=workspace_id, status="skipped_mode", details=details)
+                logger.info("workspace_scheduler_skipped_mode", workspace_id=workspace_id, mode=workspace_mode)
+                continue
+
             if self._workspace_pause_checker(workspace_id):
                 details = {"reason": "workspace_paused"}
                 runs.append(WorkspaceRunSummary(workspace_id=workspace_id, status="skipped_paused", details=details))

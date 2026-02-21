@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from src.billing.webhooks import router as billing_router
 from src.auth.middleware import AUTH_CONTEXT_KEY, resolve_request_auth_context
 from src.auth.router import router as auth_router
+from src.control.security import get_telegram_notification_channel_status
 from src.control.telegram_bot import router as control_telegram_router
 from src.core.config import get_settings
 from src.core.logger import bind_request_context, clear_request_context, get_logger
@@ -115,6 +116,7 @@ async def request_context_middleware(request: Request, call_next):
 def on_startup() -> None:
     load_models()
     sentry_enabled = init_sentry()
+    telegram_channel = get_telegram_notification_channel_status()
     logger.info(
         "application_startup",
         env=settings.env,
@@ -122,7 +124,15 @@ def on_startup() -> None:
         sentry_enabled=sentry_enabled,
         metrics_enabled=settings.metrics_enabled,
         ip_rate_limit_enabled=settings.ip_rate_limit_enabled,
+        telegram_notification_status=telegram_channel.status,
     )
+    if telegram_channel.degraded:
+        logger.warning(
+            "telegram_notification_channel_degraded",
+            reasons=sorted(telegram_channel.reasons),
+            has_bot_token=telegram_channel.has_bot_token,
+            allowed_telegram_ids_count=telegram_channel.allowed_ids_count,
+        )
 
 
 @app.get("/health")

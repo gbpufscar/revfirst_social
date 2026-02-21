@@ -12,7 +12,7 @@ from src.core.runtime import RuntimeConfig
 from src.orchestrator.locks import WorkspaceLockManager
 from src.orchestrator.scheduler import WorkspaceScheduler
 from src.storage.db import Base, load_models
-from src.storage.models import Workspace, WorkspaceEvent
+from src.storage.models import Workspace, WorkspaceControlSetting, WorkspaceEvent
 
 
 class _FakeRedis:
@@ -236,3 +236,52 @@ def test_scheduler_single_workspace_mode_without_primary_returns_empty(monkeypat
 
     assert result.total_active_workspaces == 0
     assert result.executed == 0
+
+
+def test_scheduler_skips_workspaces_when_mode_blocks_scheduler() -> None:
+    session_factory = _build_sqlite_session_factory()
+    fake_redis = _FakeRedis()
+    lock_manager = WorkspaceLockManager(fake_redis, ttl_seconds=60)
+    run_order: list[str] = []
+
+    with session_factory() as seed:
+        ws_manual = _create_workspace(seed, name=f"manual-{uuid.uuid4()}", status="active")
+        ws_containment = _create_workspace(seed, name=f"containment-{uuid.uuid4()}", status="active")
+        ws_semi = _create_workspace(seed, name=f"semi-{uuid.uuid4()}", status="active")
+        seed.add(
+            WorkspaceControlSetting(
+                id=str(uuid.uuid4()),
+                workspace_id=ws_manual.id,
+                is_paused=False,
+                operational_mode="manual",
+                channels_json='{"blog":false,"email":false,"instagram":false,"x":true}',
+            )
+        )
+        seed.add(
+            WorkspaceControlSetting(
+                id=str(uuid.uuid4()),
+                workspace_id=ws_containment.id,
+                is_paused=False,
+                operational_mode="containment",
+                channels_json='{"blog":false,"email":false,"instagram":false,"x":true}',
+            )
+        )
+        seed.commit()
+
+    scheduler = WorkspaceScheduler(
+        session_factory=session_factory,
+        lock_manager=lock_manager,
+        pipeline_runner=lambda session, workspace_id: run_order.append(workspace_id) or {"pipeline": "ok"},  # noqa: ARG005
+        workspace_mode_resolver=lambda workspace_id: (
+            "manual"
+            if workspace_id == ws_manual.id
+            else ("containment" if workspace_id == ws_containment.id else "semi_autonomous")
+        ),
+    )
+    result = scheduler.run_once(workspace_ids=[ws_manual.id, ws_containment.id, ws_semi.id])
+
+    assert result.total_active_workspaces == 3
+    assert result.executed == 1
+    assert result.failed == 0
+    assert run_order == [ws_semi.id]
+    assert sorted(summary.status for summary in result.runs).count("skipped_mode") == 2

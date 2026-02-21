@@ -114,6 +114,25 @@ class Settings(BaseSettings):
     telegram_admins_file_path: str = "config/telegram_admins.yaml"
     control_run_lock_ttl_seconds: int = 120
     control_limit_override_ttl_seconds: int = 86400
+    stability_guard_scheduler_checks_enabled: bool = True
+    stability_auto_containment_on_critical: bool = True
+    stability_publish_failures_warning_count: int = 1
+    stability_publish_failures_critical_count: int = 3
+    stability_webhook_min_commands_for_warning: int = 4
+    stability_webhook_error_rate_warning_pct: float = 40.0
+    stability_queue_publishing_stalled_minutes: int = 20
+    stability_queue_pending_backlog_count: int = 10
+    stability_queue_pending_backlog_age_minutes: int = 180
+    stability_lock_stuck_warning_count: int = 4
+    stability_scheduler_failures_warning_count: int = 2
+    stability_kill_switch_enabled: bool = True
+    stability_kill_switch_criteria_threshold: int = 3
+    stability_kill_switch_ttl_seconds: int = 3600
+    stability_kill_switch_ack_ttl_seconds: int = 21600
+    stability_kill_switch_publish_failures_24h_threshold: int = 3
+    stability_kill_switch_consecutive_publish_failures_threshold: int = 3
+    stability_kill_switch_queue_stalled_minutes_threshold: int = 20
+    stability_kill_switch_lock_stuck_count_threshold: int = 5
     sentry_dsn: str = ""
     sentry_traces_sample_rate: float = 0.0
     metrics_enabled: bool = True
@@ -202,6 +221,38 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("X_STRATEGY_CANDIDATE_MIN_SIGNAL_POSTS must be zero or positive.")
     if settings.x_strategy_candidate_min_recent_posts <= 0:
         raise ValueError("X_STRATEGY_CANDIDATE_MIN_RECENT_POSTS must be positive.")
+    if settings.stability_publish_failures_warning_count < 0:
+        raise ValueError("STABILITY_PUBLISH_FAILURES_WARNING_COUNT must be zero or positive.")
+    if settings.stability_publish_failures_critical_count <= 0:
+        raise ValueError("STABILITY_PUBLISH_FAILURES_CRITICAL_COUNT must be positive.")
+    if settings.stability_webhook_min_commands_for_warning < 0:
+        raise ValueError("STABILITY_WEBHOOK_MIN_COMMANDS_FOR_WARNING must be zero or positive.")
+    if settings.stability_webhook_error_rate_warning_pct < 0 or settings.stability_webhook_error_rate_warning_pct > 100:
+        raise ValueError("STABILITY_WEBHOOK_ERROR_RATE_WARNING_PCT must be between 0 and 100.")
+    if settings.stability_queue_publishing_stalled_minutes <= 0:
+        raise ValueError("STABILITY_QUEUE_PUBLISHING_STALLED_MINUTES must be positive.")
+    if settings.stability_queue_pending_backlog_count <= 0:
+        raise ValueError("STABILITY_QUEUE_PENDING_BACKLOG_COUNT must be positive.")
+    if settings.stability_queue_pending_backlog_age_minutes <= 0:
+        raise ValueError("STABILITY_QUEUE_PENDING_BACKLOG_AGE_MINUTES must be positive.")
+    if settings.stability_lock_stuck_warning_count <= 0:
+        raise ValueError("STABILITY_LOCK_STUCK_WARNING_COUNT must be positive.")
+    if settings.stability_scheduler_failures_warning_count <= 0:
+        raise ValueError("STABILITY_SCHEDULER_FAILURES_WARNING_COUNT must be positive.")
+    if settings.stability_kill_switch_criteria_threshold <= 0:
+        raise ValueError("STABILITY_KILL_SWITCH_CRITERIA_THRESHOLD must be positive.")
+    if settings.stability_kill_switch_ttl_seconds <= 0:
+        raise ValueError("STABILITY_KILL_SWITCH_TTL_SECONDS must be positive.")
+    if settings.stability_kill_switch_ack_ttl_seconds < settings.stability_kill_switch_ttl_seconds:
+        raise ValueError("STABILITY_KILL_SWITCH_ACK_TTL_SECONDS must be >= STABILITY_KILL_SWITCH_TTL_SECONDS.")
+    if settings.stability_kill_switch_publish_failures_24h_threshold <= 0:
+        raise ValueError("STABILITY_KILL_SWITCH_PUBLISH_FAILURES_24H_THRESHOLD must be positive.")
+    if settings.stability_kill_switch_consecutive_publish_failures_threshold <= 0:
+        raise ValueError("STABILITY_KILL_SWITCH_CONSECUTIVE_PUBLISH_FAILURES_THRESHOLD must be positive.")
+    if settings.stability_kill_switch_queue_stalled_minutes_threshold <= 0:
+        raise ValueError("STABILITY_KILL_SWITCH_QUEUE_STALLED_MINUTES_THRESHOLD must be positive.")
+    if settings.stability_kill_switch_lock_stuck_count_threshold <= 0:
+        raise ValueError("STABILITY_KILL_SWITCH_LOCK_STUCK_COUNT_THRESHOLD must be positive.")
     return settings
 
 

@@ -12,7 +12,15 @@ from src.core.config import get_settings
 from src.core.metrics import reset_metrics_for_tests
 from src.integrations.x.x_client import get_x_client
 from src.storage.db import Base, get_session, load_models
-from src.storage.models import PublishAuditLog, PublishCooldown, Role, User, WorkspaceDailyUsage, WorkspaceUser
+from src.storage.models import (
+    PublishAuditLog,
+    PublishCooldown,
+    Role,
+    User,
+    WorkspaceControlSetting,
+    WorkspaceDailyUsage,
+    WorkspaceUser,
+)
 from src.storage.security import get_token_key, hash_password
 
 
@@ -467,6 +475,66 @@ def test_publish_post_is_blocked_for_member_role(monkeypatch) -> None:
         )
         assert response.status_code == 403
         assert response.json()["detail"] == "Insufficient role"
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_publish_post_is_blocked_when_operational_mode_is_containment(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
+    monkeypatch.setenv("PUBLISHING_DIRECT_API_INTERNAL_KEY", "test-internal-publish-key")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    fake_x = _FakePublisherXClient()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    api_main.app.dependency_overrides[get_x_client] = lambda: fake_x
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"publish-containment-{uuid.uuid4()}",
+            owner_email="publish-containment-owner@revfirst.io",
+            owner_password="publish-containment-pass-123",
+        )
+
+        with session_factory() as update_session:
+            row = update_session.scalar(
+                select(WorkspaceControlSetting).where(WorkspaceControlSetting.workspace_id == workspace_id)
+            )
+            if row is None:
+                row = WorkspaceControlSetting(
+                    workspace_id=workspace_id,
+                    is_paused=False,
+                    operational_mode="semi_autonomous",
+                    channels_json='{"blog":false,"email":false,"instagram":false,"x":true}',
+                )
+                update_session.add(row)
+                update_session.flush()
+            row.operational_mode = "containment"
+            update_session.commit()
+
+        response = client.post(
+            "/publishing/post",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Containment mode must block publishing.",
+            },
+            headers=_publish_headers(token),
+        )
+        assert response.status_code == 409
+        assert "operational mode" in response.json()["detail"].lower()
     finally:
         api_main.app.dependency_overrides.clear()
         get_token_key.cache_clear()

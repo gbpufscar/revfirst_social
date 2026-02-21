@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.billing.plans import check_plan_limit, record_usage
+from src.control.services import get_workspace_operational_mode, publishing_allowed_for_mode
 from src.core.config import get_settings
 from src.core.metrics import (
     record_publish_error,
@@ -150,6 +151,50 @@ def _extract_external_post_id(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _mode_block_message(mode: str) -> str:
+    return f"Publishing blocked by operational mode: {mode}"
+
+
+def _guard_operational_mode(
+    session: Session,
+    *,
+    workspace_id: str,
+    action: str,
+    text: str,
+    platform: str,
+    owner_override: bool = False,
+    in_reply_to_tweet_id: Optional[str] = None,
+    target_thread_id: Optional[str] = None,
+    target_author_id: Optional[str] = None,
+) -> Optional[PublishResult]:
+    mode = get_workspace_operational_mode(session, workspace_id=workspace_id)
+    if publishing_allowed_for_mode(mode, owner_override=owner_override):
+        return None
+
+    _create_audit_log(
+        session,
+        platform=platform,
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        status="blocked_mode",
+        in_reply_to_tweet_id=in_reply_to_tweet_id,
+        target_thread_id=target_thread_id,
+        target_author_id=target_author_id,
+        error_message=_mode_block_message(mode),
+        payload={"mode": mode},
+    )
+    session.commit()
+    return PublishResult(
+        workspace_id=workspace_id,
+        action=action,
+        published=False,
+        external_post_id=None,
+        status="blocked_mode",
+        message=_mode_block_message(mode),
+    )
+
+
 def publish_reply(
     session: Session,
     *,
@@ -159,9 +204,23 @@ def publish_reply(
     thread_id: Optional[str],
     target_author_id: Optional[str],
     x_client: XClient,
+    owner_override: bool = False,
 ) -> PublishResult:
     settings = get_settings()
     action = "publish_reply"
+    mode_block = _guard_operational_mode(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        platform="x",
+        owner_override=owner_override,
+        in_reply_to_tweet_id=in_reply_to_tweet_id,
+        target_thread_id=thread_id,
+        target_author_id=target_author_id,
+    )
+    if mode_block is not None:
+        return mode_block
 
     token = get_workspace_x_access_token(session, workspace_id=workspace_id)
     if token is None:
@@ -406,8 +465,19 @@ def publish_post(
     workspace_id: str,
     text: str,
     x_client: XClient,
+    owner_override: bool = False,
 ) -> PublishResult:
     action = "publish_post"
+    mode_block = _guard_operational_mode(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        platform="x",
+        owner_override=owner_override,
+    )
+    if mode_block is not None:
+        return mode_block
     token = get_workspace_x_access_token(session, workspace_id=workspace_id)
     if token is None:
         record_publish_error(workspace_id=workspace_id, channel="x")
@@ -551,8 +621,19 @@ def publish_email(
     email_publisher: Optional[EmailPublisher] = None,
     source_kind: Optional[str] = None,
     source_ref_id: Optional[str] = None,
+    owner_override: bool = False,
 ) -> PublishResult:
     action = "publish_email"
+    mode_block = _guard_operational_mode(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=body,
+        platform="email",
+        owner_override=owner_override,
+    )
+    if mode_block is not None:
+        return mode_block
     publisher = email_publisher or EmailPublisher()
 
     limit_decision = check_plan_limit(
@@ -682,8 +763,19 @@ def publish_blog(
     blog_publisher: Optional[BlogPublisher] = None,
     source_kind: Optional[str] = None,
     source_ref_id: Optional[str] = None,
+    owner_override: bool = False,
 ) -> PublishResult:
     action = "publish_blog"
+    mode_block = _guard_operational_mode(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=markdown,
+        platform="blog",
+        owner_override=owner_override,
+    )
+    if mode_block is not None:
+        return mode_block
     publisher = blog_publisher or BlogPublisher()
 
     limit_decision = check_plan_limit(
@@ -813,8 +905,19 @@ def publish_instagram(
     source_kind: Optional[str] = None,
     source_ref_id: Optional[str] = None,
     scheduled_for: Optional[str] = None,
+    owner_override: bool = False,
 ) -> PublishResult:
     action = "publish_instagram"
+    mode_block = _guard_operational_mode(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=caption,
+        platform="instagram",
+        owner_override=owner_override,
+    )
+    if mode_block is not None:
+        return mode_block
     publisher = instagram_publisher or InstagramPublisher()
 
     limit_decision = check_plan_limit(

@@ -57,6 +57,9 @@ def parse_command(text: str) -> Optional[ControlCommand]:
     if command_name in {
         "help",
         "status",
+        "mode",
+        "stability",
+        "ack_kill_switch",
         "metrics",
         "growth",
         "growth_weekly",

@@ -68,7 +68,11 @@ def _render_queue_reply(data: Dict[str, Any]) -> str:
 
 
 def _render_status_reply(data: Dict[str, Any]) -> str:
+    mode = str(data.get("mode") or "semi_autonomous")
     paused = bool(data.get("paused"))
+    global_kill_switch = bool(data.get("global_kill_switch"))
+    global_kill_ttl = data.get("global_kill_switch_ttl_seconds")
+    telegram_status = str(data.get("telegram_status") or "UNKNOWN").upper()
     channels = data.get("channels") if isinstance(data.get("channels"), dict) else {}
     enabled_channels = sorted([name for name, is_enabled in channels.items() if bool(is_enabled)])
     last_runs = data.get("last_runs") if isinstance(data.get("last_runs"), dict) else {}
@@ -80,7 +84,11 @@ def _render_status_reply(data: Dict[str, Any]) -> str:
             last_run_summary = f"{first_pipeline}={pipeline_data.get('status')}"
     return (
         "Status do workspace:\n"
+        f"- Modo operacional: {mode}\n"
         f"- Pausado: {'sim' if paused else 'nao'}\n"
+        f"- Telegram: {telegram_status}\n"
+        f"- Kill-switch global: {'ativo' if global_kill_switch else 'inativo'}"
+        f"{' (ttl=' + str(global_kill_ttl) + 's)' if global_kill_ttl is not None else ''}\n"
         f"- Canais ativos: {', '.join(enabled_channels) if enabled_channels else 'nenhum'}\n"
         f"- Ultimo run: {last_run_summary}\n"
         "Proxima acao: use /queue para revisar pendencias."
@@ -99,6 +107,44 @@ def _render_pipeline_reply(data: Dict[str, Any]) -> str:
         f"Tipos: {queued_types_text}\n"
         "Proxima acao: rode /queue e aprove os itens."
     )
+
+
+def _render_stability_reply(data: Dict[str, Any], *, containment_mode: bool = False) -> str:
+    overall_status = str(data.get("overall_status") or "unknown").strip().lower()
+    status_label = {
+        "healthy": "saudavel",
+        "warning": "atencao",
+        "critical": "critico",
+    }.get(overall_status, overall_status or "unknown")
+    critical_count = int(data.get("critical_count") or 0)
+    warning_count = int(data.get("warning_count") or 0)
+    recommended_actions = data.get("recommended_actions") if isinstance(data.get("recommended_actions"), list) else []
+    actions_applied = data.get("actions_applied") if isinstance(data.get("actions_applied"), list) else []
+
+    lines = [
+        "Stability guard:",
+        f"- Status geral: {status_label}",
+        f"- Checks criticos: {critical_count}",
+        f"- Checks em atencao: {warning_count}",
+    ]
+
+    if containment_mode:
+        if actions_applied:
+            lines.append(f"- Contencao aplicada: {', '.join(str(value) for value in actions_applied)}")
+        else:
+            lines.append("- Contencao aplicada: nenhuma")
+
+    kill_switch_action = data.get("kill_switch_action") if isinstance(data.get("kill_switch_action"), dict) else {}
+    if kill_switch_action.get("applied"):
+        ttl_seconds = kill_switch_action.get("ttl_seconds")
+        lines.append(f"- Kill-switch global: ativado (ttl={ttl_seconds}s)")
+
+    if recommended_actions:
+        lines.append(f"Acao sugerida: {str(recommended_actions[0])}")
+    else:
+        lines.append("Acao sugerida: manter monitoramento diario.")
+    lines.append("Proxima acao: rode /stability novamente apos ajuste.")
+    return "\n".join(lines)
 
 
 def _render_preview_reply(data: Dict[str, Any], *, with_image: bool) -> str:
@@ -292,6 +338,51 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
         body = _render_queue_reply(data)
     elif response.message == "status_ok":
         body = _render_status_reply(data)
+    elif response.message == "mode_ok":
+        body = (
+            "Modo operacional atual:\n"
+            f"- Modo: {data.get('mode')}\n"
+            "Para alterar: /mode set <manual|semi_autonomous|autonomous_limited|containment> [confirm]"
+        )
+    elif response.message == "mode_updated":
+        body = (
+            "Modo operacional atualizado.\n"
+            f"- Novo modo: {data.get('mode')}\n"
+            f"- Alterado em: {data.get('last_mode_change_at') or 'n/d'}"
+        )
+    elif response.message == "mode_set_requires_confirmation":
+        body = (
+            "Transicao para autonomous_limited requer confirmacao explicita.\n"
+            f"Execute: {data.get('hint') or '/mode set autonomous_limited confirm'}"
+        )
+    elif response.message == "mode_invalid_target":
+        body = "Modo invalido. Use /mode para listar os modos aceitos."
+    elif response.message == "mode_invalid_args":
+        body = "Uso: /mode ou /mode set <modo> [confirm]."
+    elif response.message == "stability_report_ok":
+        body = _render_stability_reply(data, containment_mode=False)
+    elif response.message == "stability_auto_containment_applied":
+        body = _render_stability_reply(data, containment_mode=True)
+    elif response.message == "stability_kill_switch_applied":
+        body = _render_stability_reply(data, containment_mode=True)
+    elif response.message == "stability_containment_applied":
+        body = _render_stability_reply(data, containment_mode=True)
+    elif response.message == "stability_containment_not_required":
+        body = _render_stability_reply(data, containment_mode=True)
+    elif response.message == "stability_containment_requires_admin":
+        body = "Contencao do stability guard exige owner/admin."
+    elif response.message == "stability_invalid_args":
+        body = "Uso: /stability ou /stability contain."
+    elif response.message == "kill_switch_acknowledged":
+        body = (
+            "Kill-switch global reconhecido.\n"
+            f"- TTL estendido para: {data.get('ttl_seconds')}s\n"
+            "Proxima acao: corrigir causas-raiz antes de retomar operacao."
+        )
+    elif response.message == "kill_switch_not_enabled":
+        body = "Kill-switch global nao esta ativo no momento."
+    elif response.message == "kill_switch_requires_owner":
+        body = "Apenas owner pode reconhecer o kill-switch global."
     elif response.message == "pipeline_executed":
         body = _render_pipeline_reply(data)
     elif response.message == "preview_ready":
