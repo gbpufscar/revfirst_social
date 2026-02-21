@@ -4,9 +4,46 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 
 import src.channels.instagram.publisher as instagram_publisher_module
+import src.control.telegram_bot as control_bot_module
 from src.control.services import create_queue_item
 from src.storage.models import ApprovalQueueItem, PipelineRun
 from tests.control.conftest import create_control_test_context, teardown_control_test_context
+
+
+def test_control_router_sends_chat_reply_when_command_processed(monkeypatch, tmp_path) -> None:
+    sent_messages: list[dict[str, str]] = []
+
+    def _fake_send_telegram_chat_message(*, chat_id: str, text: str) -> None:
+        sent_messages.append({"chat_id": chat_id, "text": text})
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:phase12-test-token")
+    monkeypatch.setattr(control_bot_module, "_send_telegram_chat_message", _fake_send_telegram_chat_message)
+
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 1999,
+                "message": {
+                    "message_id": 600,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/status",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "status_ok"
+
+        assert len(sent_messages) == 1
+        assert sent_messages[0]["chat_id"] == "7001"
+        assert "[ok] status_ok" in sent_messages[0]["text"]
+    finally:
+        teardown_control_test_context()
 
 
 def test_control_router_dispatches_help_and_run_commands(monkeypatch, tmp_path) -> None:
