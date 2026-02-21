@@ -9,6 +9,7 @@ from sqlalchemy import desc, select
 
 from src.control.command_schema import ControlResponse
 from src.control.formatters import format_recent_errors
+from src.control.security import get_telegram_notification_channel_status
 from src.control.services import (
     get_or_create_control_setting,
     get_workspace_operational_mode,
@@ -136,6 +137,7 @@ def handle(context: "CommandContext") -> ControlResponse:
         workspace_id=workspace_id,
         redis_client=context.redis_client,
     )
+    telegram_channel = get_telegram_notification_channel_status()
 
     data = {
         "workspace_id": workspace_id,
@@ -145,6 +147,8 @@ def handle(context: "CommandContext") -> ControlResponse:
         "paused": bool(settings.is_paused) or paused_redis,
         "global_kill_switch": global_kill,
         "global_kill_switch_ttl_seconds": global_kill_switch_ttl_seconds(context.redis_client),
+        "telegram_status": "DEGRADED" if telegram_channel.degraded else "HEALTHY",
+        "telegram_degraded_reasons": sorted(telegram_channel.reasons),
         "channels": parse_channels(settings),
         "last_runs": _latest_pipeline_summary(runs),
         "active_locks": active_locks,

@@ -42,22 +42,24 @@ def upgrade() -> None:
         "workspace_control_settings",
         sa.Column("mode_changed_by_user_id", sa.String(length=36), nullable=True),
     )
-    op.create_foreign_key(
-        "fk_workspace_control_settings_mode_changed_by_user_id",
-        "workspace_control_settings",
-        "users",
-        ["mode_changed_by_user_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    if op.get_bind().dialect.name != "sqlite":
+        op.create_foreign_key(
+            "fk_workspace_control_settings_mode_changed_by_user_id",
+            "workspace_control_settings",
+            "users",
+            ["mode_changed_by_user_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "fk_workspace_control_settings_mode_changed_by_user_id",
-        "workspace_control_settings",
-        type_="foreignkey",
-    )
+    if op.get_bind().dialect.name != "sqlite":
+        op.drop_constraint(
+            "fk_workspace_control_settings_mode_changed_by_user_id",
+            "workspace_control_settings",
+            type_="foreignkey",
+        )
     op.drop_column("workspace_control_settings", "mode_changed_by_user_id")
     op.drop_column("workspace_control_settings", "last_mode_change_at")
     op.drop_column("workspace_control_settings", "operational_mode")

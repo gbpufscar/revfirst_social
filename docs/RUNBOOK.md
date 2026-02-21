@@ -30,6 +30,8 @@ Stability guard v2:
 - Run diagnostics + auto-containment: `/stability`
 - Force manual containment (owner/admin): `/stability contain`
 - If kill-switch global is auto-activated, owner extends TTL with `/ack_kill_switch`.
+- Se `TELEGRAM_BOT_TOKEN` estiver ausente ou `allowed_telegram_ids` vazio, o sistema marca
+  `notification channel degraded` no stability guard e `/status` exibe `Telegram: DEGRADED`.
 
 ## 3. Quick Health Checks
 

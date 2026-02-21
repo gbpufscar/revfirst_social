@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import src.operations.stability_guard_agent as stability_guard_module
+from src.control.security import reset_admin_directory_cache
 from src.control.state import global_kill_switch_key
 from src.core.config import get_settings
 from src.storage.db import Base, load_models
@@ -257,3 +258,29 @@ def test_build_report_isolates_check_errors(monkeypatch) -> None:
         lock_check = next(item for item in checks if item.get("key") == "lock_health")
         assert lock_check["status"] == "error"
         assert report["check_error_count"] >= 1
+
+
+def test_build_report_marks_notification_channel_degraded(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setenv("TELEGRAM_ADMINS_FILE_PATH", str(tmp_path / "missing_telegram_admins.yaml"))
+    get_settings.cache_clear()
+    reset_admin_directory_cache()
+
+    session_factory = _build_sqlite_session_factory()
+    redis_client = _FakeRedis()
+
+    with session_factory() as session:
+        workspace_id = _create_workspace(session)
+        report = stability_guard_module.build_workspace_stability_report(
+            session,
+            workspace_id=workspace_id,
+            redis_client=redis_client,
+        )
+        checks = report.get("checks")
+        assert isinstance(checks, list)
+        notification_check = next(item for item in checks if item.get("key") == "telegram_notification_channel")
+        assert notification_check["status"] == "warn"
+        assert notification_check["summary"] == "Notification channel degraded."
+
+    get_settings.cache_clear()
+    reset_admin_directory_cache()

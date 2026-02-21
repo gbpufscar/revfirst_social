@@ -11,7 +11,7 @@ from redis import Redis
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.orm import Session
 
-from src.control.security import load_admin_directory
+from src.control.security import get_telegram_notification_channel_status, load_admin_directory
 from src.control.services import get_workspace_operational_mode, set_operational_mode, set_pause_state
 from src.control.state import (
     global_kill_switch_ttl_seconds,
@@ -195,6 +195,38 @@ def _check_webhook_command_flow(session: Session, *, workspace_id: str, now: dat
             "last_event_at": last_event_at,
         },
         "recommended_action": action,
+    }
+
+
+def _check_notification_channel() -> Dict[str, Any]:
+    status = get_telegram_notification_channel_status()
+    if status.degraded:
+        reasons = sorted(status.reasons)
+        return {
+            "key": "telegram_notification_channel",
+            "severity": "warning",
+            "status": "warn",
+            "summary": "Notification channel degraded.",
+            "details": {
+                "status": "degraded",
+                "has_bot_token": status.has_bot_token,
+                "allowed_ids_count": status.allowed_ids_count,
+                "reasons": reasons,
+            },
+            "recommended_action": "Configurar TELEGRAM_BOT_TOKEN e allowed_telegram_ids antes de depender de alertas proativos.",
+        }
+    return {
+        "key": "telegram_notification_channel",
+        "severity": "ok",
+        "status": "pass",
+        "summary": "Canal de notificacao Telegram saudavel.",
+        "details": {
+            "status": "healthy",
+            "has_bot_token": status.has_bot_token,
+            "allowed_ids_count": status.allowed_ids_count,
+            "reasons": [],
+        },
+        "recommended_action": "Nenhuma acao imediata.",
     }
 
 
@@ -550,6 +582,7 @@ def build_workspace_stability_report(
     now = datetime.now(timezone.utc)
     checks = [
         _run_check_with_isolation("x_oauth_publish_ready", _check_x_oauth, session, workspace_id=workspace_id),
+        _run_check_with_isolation("telegram_notification_channel", _check_notification_channel),
         _run_check_with_isolation("publish_failures_24h", _check_publish_failures, session, workspace_id=workspace_id, now=now),
         _run_check_with_isolation("telegram_webhook_flow", _check_webhook_command_flow, session, workspace_id=workspace_id, now=now),
         _run_check_with_isolation("approval_queue_health", _check_queue_health, session, workspace_id=workspace_id, now=now),

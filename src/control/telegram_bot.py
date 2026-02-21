@@ -72,6 +72,7 @@ def _render_status_reply(data: Dict[str, Any]) -> str:
     paused = bool(data.get("paused"))
     global_kill_switch = bool(data.get("global_kill_switch"))
     global_kill_ttl = data.get("global_kill_switch_ttl_seconds")
+    telegram_status = str(data.get("telegram_status") or "UNKNOWN").upper()
     channels = data.get("channels") if isinstance(data.get("channels"), dict) else {}
     enabled_channels = sorted([name for name, is_enabled in channels.items() if bool(is_enabled)])
     last_runs = data.get("last_runs") if isinstance(data.get("last_runs"), dict) else {}
@@ -85,6 +86,7 @@ def _render_status_reply(data: Dict[str, Any]) -> str:
         "Status do workspace:\n"
         f"- Modo operacional: {mode}\n"
         f"- Pausado: {'sim' if paused else 'nao'}\n"
+        f"- Telegram: {telegram_status}\n"
         f"- Kill-switch global: {'ativo' if global_kill_switch else 'inativo'}"
         f"{' (ttl=' + str(global_kill_ttl) + 's)' if global_kill_ttl is not None else ''}\n"
         f"- Canais ativos: {', '.join(enabled_channels) if enabled_channels else 'nenhum'}\n"

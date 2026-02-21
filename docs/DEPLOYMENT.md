@@ -34,6 +34,7 @@ Last Updated: 2026-02-20
 - `X_OAUTH_STATE_TTL_SECONDS=600`
 - `X_REQUIRED_PUBLISH_SCOPE=tweet.write`
 - `TELEGRAM_WEBHOOK_SECRET=...`
+- `TELEGRAM_BOT_TOKEN=...` (required for proactive alert delivery)
 - `TELEGRAM_ADMINS_FILE_PATH=/run/secrets/telegram_admins.yaml`
 - `APP_PUBLIC_BASE_URL=https://social.revfirst.cloud`
 - `PUBLISHING_DIRECT_API_ENABLED=false`

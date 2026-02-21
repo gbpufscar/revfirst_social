@@ -33,6 +33,18 @@ class TelegramAdminDirectory:
 
 
 @dataclass(frozen=True)
+class TelegramNotificationChannelStatus:
+    status: str
+    has_bot_token: bool
+    allowed_ids_count: int
+    reasons: Set[str]
+
+    @property
+    def degraded(self) -> bool:
+        return self.status == "degraded"
+
+
+@dataclass(frozen=True)
 class ControlActor:
     telegram_user_id: str
     user_id: str
@@ -128,6 +140,28 @@ def load_admin_directory() -> TelegramAdminDirectory:
 
 def reset_admin_directory_cache() -> None:
     load_admin_directory.cache_clear()
+
+
+def get_telegram_notification_channel_status() -> TelegramNotificationChannelStatus:
+    settings = get_settings()
+    directory = load_admin_directory()
+
+    has_bot_token = bool(settings.telegram_bot_token.strip())
+    allowed_ids_count = len(directory.allowed_telegram_ids)
+    reasons: Set[str] = set()
+
+    if not has_bot_token:
+        reasons.add("telegram_bot_token_missing")
+    if allowed_ids_count == 0:
+        reasons.add("allowed_telegram_ids_empty")
+
+    status = "degraded" if reasons else "healthy"
+    return TelegramNotificationChannelStatus(
+        status=status,
+        has_bot_token=has_bot_token,
+        allowed_ids_count=allowed_ids_count,
+        reasons=reasons,
+    )
 
 
 def _workspace_role(session: Session, *, workspace_id: str, user_id: str) -> Optional[str]:
