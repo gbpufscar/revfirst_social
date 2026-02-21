@@ -36,6 +36,9 @@ Expected:
 
 ## 4. Deploy / Redeploy (Coolify)
 
+0. Never deploy from dirty git worktree:
+   - `git status --short` must return empty output.
+   - If not empty, stop the release and commit/stash first.
 1. Confirm app source branch is `main`.
 2. Confirm domain is `social.revfirst.cloud`.
 3. Confirm app runtime port is `8000`.

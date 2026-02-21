@@ -59,6 +59,9 @@ Do not use child nameserver setup for this subdomain scenario.
 
 ## Deploy Procedure
 
+0. Block deploy from dirty worktree:
+   - `git status --short` must be empty.
+   - If not empty, stop and commit or stash before any release.
 1. Confirm source branch is `main`.
 2. Save app config and environment variables.
 3. Validate secrets before redeploy:
