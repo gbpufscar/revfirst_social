@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import secrets
+from typing import Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from sqlalchemy.orm import Session
 
 from src.auth.dependencies import require_workspace_role
@@ -32,14 +35,39 @@ def _validate_text_size(text: str) -> None:
         )
 
 
+def _enforce_direct_publish_guard(internal_publish_key: Optional[str]) -> None:
+    settings = get_settings()
+    if not settings.publishing_direct_api_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="direct_publish_api_disabled",
+        )
+
+    expected = settings.publishing_direct_api_internal_key.strip()
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="direct_publish_api_misconfigured",
+        )
+
+    received = (internal_publish_key or "").strip()
+    if not received or not secrets.compare_digest(received, expected):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="invalid_internal_publish_key",
+        )
+
+
 @router.post("/reply", response_model=PublishResponse)
 def publish_reply_endpoint(
     payload: PublishReplyRequest,
-    auth: AuthContext = Depends(require_workspace_role("owner", "admin", "member")),
+    auth: AuthContext = Depends(require_workspace_role("owner", "admin")),
     session: Session = Depends(get_session),
     x_client: XClient = Depends(get_x_client),
+    internal_publish_key: Optional[str] = Header(default=None, alias="X-RevFirst-Internal-Key"),
 ) -> PublishResponse:
     _enforce_workspace_scope(auth, payload.workspace_id)
+    _enforce_direct_publish_guard(internal_publish_key)
     _validate_text_size(payload.text)
     set_workspace_context(session, payload.workspace_id)
     result = publish_reply(
@@ -74,11 +102,13 @@ def publish_reply_endpoint(
 @router.post("/post", response_model=PublishResponse)
 def publish_post_endpoint(
     payload: PublishPostRequest,
-    auth: AuthContext = Depends(require_workspace_role("owner", "admin", "member")),
+    auth: AuthContext = Depends(require_workspace_role("owner", "admin")),
     session: Session = Depends(get_session),
     x_client: XClient = Depends(get_x_client),
+    internal_publish_key: Optional[str] = Header(default=None, alias="X-RevFirst-Internal-Key"),
 ) -> PublishResponse:
     _enforce_workspace_scope(auth, payload.workspace_id)
+    _enforce_direct_publish_guard(internal_publish_key)
     _validate_text_size(payload.text)
     set_workspace_context(session, payload.workspace_id)
     result = publish_post(
@@ -105,4 +135,3 @@ def publish_post_endpoint(
         status=result.status,
         message=result.message,
     )
-

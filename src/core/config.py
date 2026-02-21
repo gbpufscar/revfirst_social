@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     x_search_url: str = "https://api.twitter.com/2/tweets/search/recent"
     x_publish_url: str = "https://api.twitter.com/2/tweets"
     x_users_me_url: str = "https://api.twitter.com/2/users/me"
+    x_user_lookup_url: str = "https://api.twitter.com/2/users/{user_id}"
+    x_user_tweets_url: str = "https://api.twitter.com/2/users/{user_id}/tweets"
+    x_tweet_lookup_url: str = "https://api.twitter.com/2/tweets/{tweet_id}"
     x_api_timeout_seconds: int = 20
     x_oauth_state_ttl_seconds: int = 600
     x_oauth_default_scopes: str = "tweet.read tweet.write users.read offline.access"
@@ -78,6 +81,13 @@ class Settings(BaseSettings):
     scheduler_workspace_lock_ttl_seconds: int = 300
     scheduler_max_workspaces_per_run: int = 50
     scheduler_candidate_evaluation_limit: int = 5
+    scheduler_auto_queue_replies_enabled: bool = True
+    scheduler_auto_queue_daily_post_enabled: bool = True
+    scheduler_daily_post_interval_hours: int = 24
+    scheduler_growth_collection_enabled: bool = True
+    scheduler_growth_collection_interval_hours: int = 24
+    scheduler_strategy_scan_enabled: bool = True
+    scheduler_strategy_scan_interval_hours: int = 168
     telegram_webhook_secret: str = ""
     telegram_bot_token: str = ""
     telegram_seed_max_text_chars: int = 1200
@@ -143,6 +153,14 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("X_REQUIRED_PUBLISH_SCOPE must not be empty.")
     if settings.publishing_direct_api_enabled and not settings.publishing_direct_api_internal_key.strip():
         raise ValueError("PUBLISHING_DIRECT_API_INTERNAL_KEY is required when PUBLISHING_DIRECT_API_ENABLED=true.")
+    if settings.scheduler_candidate_evaluation_limit <= 0:
+        raise ValueError("SCHEDULER_CANDIDATE_EVALUATION_LIMIT must be positive.")
+    if settings.scheduler_daily_post_interval_hours <= 0:
+        raise ValueError("SCHEDULER_DAILY_POST_INTERVAL_HOURS must be positive.")
+    if settings.scheduler_growth_collection_interval_hours <= 0:
+        raise ValueError("SCHEDULER_GROWTH_COLLECTION_INTERVAL_HOURS must be positive.")
+    if settings.scheduler_strategy_scan_interval_hours <= 0:
+        raise ValueError("SCHEDULER_STRATEGY_SCAN_INTERVAL_HOURS must be positive.")
     return settings
 
 

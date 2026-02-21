@@ -16,6 +16,8 @@ def handle(context: "CommandContext") -> ControlResponse:
         "/help",
         "/status",
         "/metrics",
+        "/growth",
+        "/growth_weekly",
         "/daily_report",
         "/weekly_report",
         "/queue",
@@ -29,6 +31,9 @@ def handle(context: "CommandContext") -> ControlResponse:
         "/channel enable|disable <x|email|blog|instagram>",
         "/limit replies|posts <n>",
         "/seed <text>",
+        "/strategy_scan <account_user_id> [account_username]",
+        "/strategy_scan run",
+        "/strategy_report",
     ]
     return ControlResponse(
         success=True,

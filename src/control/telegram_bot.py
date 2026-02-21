@@ -20,8 +20,8 @@ from src.core.logger import get_logger
 from src.integrations.x.x_client import XClient, get_x_client
 from src.schemas.control import ControlWebhookResponse
 from src.storage.db import get_session
-from src.storage.tenant import set_workspace_context
 from src.storage.redis_client import get_client as get_redis_client
+from src.storage.tenant import set_workspace_context
 
 
 router = APIRouter(prefix="/control/telegram", tags=["control-telegram"])
@@ -119,6 +119,61 @@ def _render_preview_reply(data: Dict[str, Any], *, with_image: bool) -> str:
     return "\n".join(lines)
 
 
+def _render_growth_reply(message: str, data: Dict[str, Any]) -> str:
+    kpis = data.get("kpis") if isinstance(data.get("kpis"), dict) else {}
+    engagement = kpis.get("engagement") if isinstance(kpis.get("engagement"), dict) else {}
+    period_days = int(data.get("period_days") or kpis.get("period_days") or (7 if message == "growth_weekly_ok" else 1))
+    recommendations = data.get("recommendations") if isinstance(data.get("recommendations"), list) else []
+
+    lines = [
+        f"Relatorio de crescimento ({period_days} dia(s)):",
+        f"- Posts publicados: {int(kpis.get('published_posts') or 0)}",
+        f"- Replies publicadas: {int(kpis.get('published_replies') or 0)}",
+        f"- Falhas de publicacao: {int(kpis.get('failed_publications') or 0)}",
+        f"- Delta de seguidores: {kpis.get('follower_delta') if kpis.get('follower_delta') is not None else 'n/d'}",
+        f"- Engajamento medio (likes/replies): {engagement.get('avg_likes', 0.0)}/{engagement.get('avg_replies', 0.0)}",
+    ]
+    if recommendations:
+        lines.append(f"Acao sugerida: {str(recommendations[0])}")
+    return "\n".join(lines)
+
+
+def _render_strategy_scan_reply(data: Dict[str, Any]) -> str:
+    status = str(data.get("status") or "unknown")
+    watchlist_count = int(data.get("watchlist_count") or 0)
+    ingested_posts = int(data.get("ingested_posts") or 0)
+    if status in {"missing_x_oauth", "no_watchlist", "no_data"}:
+        return (
+            "Scan de estrategia nao concluido.\n"
+            f"status: {status}\n"
+            f"watchlist: {watchlist_count}\n"
+            "Proxima acao: adicione conta alvo com /strategy_scan <account_user_id> <username>."
+        )
+
+    recommendations = data.get("recommendations") if isinstance(data.get("recommendations"), list) else []
+    top_recommendation = str(recommendations[0]) if recommendations else "Revisar pattern extraido."
+    confidence = int(data.get("confidence_score") or 0)
+    return (
+        "Scan de estrategia concluido.\n"
+        f"- Contas na watchlist: {watchlist_count}\n"
+        f"- Posts ingeridos: {ingested_posts}\n"
+        f"- Confianca do padrao: {confidence}\n"
+        f"Acao sugerida: {top_recommendation}"
+    )
+
+
+def _render_strategy_report_reply(data: Dict[str, Any]) -> str:
+    recommendations = data.get("recommendations") if isinstance(data.get("recommendations"), list) else []
+    first_recommendation = str(recommendations[0]) if recommendations else "Sem recomendacoes no momento."
+    return (
+        "Relatorio de estrategia benchmark:\n"
+        f"- Watchlist ativa: {int(data.get('watchlist_count') or 0)}\n"
+        f"- Janela: {str(data.get('period_window') or 'n/d')}\n"
+        f"- Confianca: {int(data.get('confidence_score') or 0)}\n"
+        f"Acao sugerida: {first_recommendation}"
+    )
+
+
 def _render_chat_reply(response: ControlWebhookResponse) -> str:
     data = dict(response.data or {})
     data.pop("preview_photo", None)
@@ -139,6 +194,23 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
         body = _render_preview_reply(data, with_image=True)
     elif response.message == "preview_image_unavailable":
         body = _render_preview_reply(data, with_image=False)
+    elif response.message in {"growth_report_ok", "growth_weekly_ok"}:
+        body = _render_growth_reply(response.message, data)
+    elif response.message == "strategy_scan_ok":
+        body = _render_strategy_scan_reply(data)
+    elif response.message == "strategy_report_ok":
+        body = _render_strategy_report_reply(data)
+    elif response.message == "strategy_watchlist_updated":
+        body = (
+            "Conta adicionada na watchlist de estrategia.\n"
+            f"account_user_id: {data.get('account_user_id')}\n"
+            f"username: {data.get('account_username') or 'n/d'}\n"
+            "Proxima acao: /strategy_scan run"
+        )
+    elif response.message == "strategy_report_empty":
+        body = "Relatorio de estrategia ainda vazio. Rode /strategy_scan run primeiro."
+    elif response.message == "strategy_scan_not_ready":
+        body = _render_strategy_scan_reply(data)
     elif response.message == "approved_and_published":
         queue_id = data.get("queue_id")
         external_post_id = data.get("external_post_id")
