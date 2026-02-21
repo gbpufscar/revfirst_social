@@ -230,6 +230,81 @@ def test_phase9_generate_with_auto_publish_creates_post_usage(monkeypatch) -> No
         get_settings.cache_clear()
 
 
+def test_phase9_generate_avoids_duplicate_copy(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+
+    def override_get_session():
+        session = session_factory()
+        try:
+            yield session
+        finally:
+            session.close()
+
+    api_main.app.dependency_overrides[get_session] = override_get_session
+    try:
+        client = TestClient(api_main.app)
+        workspace_id, token = _bootstrap_workspace(
+            client,
+            workspace_name=f"phase9-dedup-{uuid.uuid4()}",
+            owner_email="phase9-dedup-owner@revfirst.io",
+            owner_password="phase9-dedup-owner-pass",
+        )
+
+        manual_seed = client.post(
+            "/integrations/telegram/seed/manual",
+            json={
+                "workspace_id": workspace_id,
+                "text": "Founder ops note: onboarding, retention, and CAC payback are the core growth loop.",
+                "source_chat_id": "manual-chat",
+                "source_message_id": "manual-message-dedup-1",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert manual_seed.status_code == 200
+
+        first = client.post(
+            "/daily-post/generate",
+            json={
+                "workspace_id": workspace_id,
+                "topic": "builder growth",
+                "auto_publish": False,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert first.status_code == 200
+        first_payload = first.json()
+        assert first_payload["status"] == "ready"
+
+        second = client.post(
+            "/daily-post/generate",
+            json={
+                "workspace_id": workspace_id,
+                "topic": "builder growth",
+                "auto_publish": False,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert second.status_code == 200
+        second_payload = second.json()
+        assert second_payload["status"] == "ready"
+        assert second_payload["text"] != first_payload["text"]
+
+        with session_factory() as verify_session:
+            drafts = verify_session.scalars(
+                select(DailyPostDraft).where(DailyPostDraft.workspace_id == workspace_id)
+            ).all()
+            assert len(drafts) == 2
+            assert len({draft.content_text for draft in drafts}) == 2
+    finally:
+        api_main.app.dependency_overrides.clear()
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
 def test_phase9_member_cannot_auto_publish(monkeypatch) -> None:
     monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
     monkeypatch.setenv("PUBLISHING_DIRECT_API_ENABLED", "true")
