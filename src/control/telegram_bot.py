@@ -186,13 +186,26 @@ def _render_strategy_discovery_reply(data: Dict[str, Any]) -> str:
             "Proxima acao: valide OAuth do X e tente /strategy_discover run."
         )
     candidates = data.get("candidates") if isinstance(data.get("candidates"), list) else []
+    criteria = data.get("criteria") if isinstance(data.get("criteria"), dict) else {}
     lines = [
         "Descoberta de contas concluida.",
         f"- Usuarios analisados: {int(data.get('scanned_users') or 0)}",
         f"- Novos candidatos: {int(data.get('discovered') or 0)}",
         f"- Candidatos atualizados: {int(data.get('updated') or 0)}",
+        f"- Rejeitados por qualidade: {int(data.get('quality_rejected') or 0)}",
+        f"- Removidos da fila por cutoff: {int(data.get('pruned_pending') or 0)}",
         f"- Pendentes para aprovacao: {int(data.get('pending_count') or 0)}",
     ]
+    if criteria:
+        lines.append(
+            "Criterios ativos: "
+            f"score>={int(criteria.get('min_score') or 0)}, "
+            f"engaj>={float(criteria.get('min_avg_engagement') or 0):.1f}, "
+            f"taxa>={float(criteria.get('min_engagement_rate_pct') or 0):.2f}%, "
+            f"cadencia>={float(criteria.get('min_cadence_per_day') or 0):.2f}/dia, "
+            f"sinais>={int(criteria.get('min_signal_posts') or 0)}, "
+            f"posts>={int(criteria.get('min_recent_posts') or 0)}."
+        )
     if candidates:
         top = candidates[0] if isinstance(candidates[0], dict) else {}
         lines.append(
@@ -200,8 +213,26 @@ def _render_strategy_discovery_reply(data: Dict[str, Any]) -> str:
             f"{top.get('account_username') or 'n/d'} "
             f"(score={int(top.get('score') or 0)}, id={top.get('candidate_id')})"
         )
+        lines.append(f"URL: {top.get('profile_url') or 'n/d'}")
     lines.append("Proxima acao: /strategy_discover queue")
     return "\n".join(lines)
+
+
+def _render_strategy_criteria_reply(data: Dict[str, Any]) -> str:
+    criteria = data.get("criteria") if isinstance(data.get("criteria"), dict) else {}
+    if not criteria:
+        return "Criterios de descoberta indisponiveis."
+    return (
+        "Criterios de pre-selecao (modo rigoroso):\n"
+        f"- Score minimo: {int(criteria.get('min_score') or 0)}\n"
+        f"- Seguidores alvo: {int(criteria.get('min_followers') or 0)} a {int(criteria.get('max_followers') or 0)}\n"
+        f"- Engajamento medio minimo: {float(criteria.get('min_avg_engagement') or 0):.1f}\n"
+        f"- Taxa de engajamento minima: {float(criteria.get('min_engagement_rate_pct') or 0):.2f}%\n"
+        f"- Cadencia minima: {float(criteria.get('min_cadence_per_day') or 0):.2f} post/dia\n"
+        f"- Sinais minimos no search: {int(criteria.get('min_signal_posts') or 0)}\n"
+        f"- Posts recentes minimos: {int(criteria.get('min_recent_posts') or 0)}\n"
+        "Proxima acao: rode /strategy_discover run e depois /strategy_discover queue."
+    )
 
 
 def _render_strategy_candidates_queue(data: Dict[str, Any]) -> str:
@@ -209,7 +240,16 @@ def _render_strategy_candidates_queue(data: Dict[str, Any]) -> str:
     if not items:
         return "Fila de candidatos de estrategia vazia.\nProxima acao: rode /strategy_discover run."
 
+    criteria = data.get("criteria") if isinstance(data.get("criteria"), dict) else {}
     lines = [f"Candidatos de estrategia pendentes ({len(items)}):"]
+    if criteria:
+        lines.append(
+            "Filtro ativo: "
+            f"score>={int(criteria.get('min_score') or 0)}, "
+            f"engaj>={float(criteria.get('min_avg_engagement') or 0):.1f}, "
+            f"taxa>={float(criteria.get('min_engagement_rate_pct') or 0):.2f}%, "
+            f"cadencia>={float(criteria.get('min_cadence_per_day') or 0):.2f}/dia."
+        )
     for index, row in enumerate(items[:5], start=1):
         if not isinstance(row, dict):
             continue
@@ -218,9 +258,22 @@ def _render_strategy_candidates_queue(data: Dict[str, Any]) -> str:
         user_id = str(row.get("account_user_id") or "n/d")
         score = int(row.get("score") or 0)
         followers = row.get("followers_count")
+        avg_engagement = float(row.get("avg_engagement") or 0.0)
+        cadence = float(row.get("cadence_per_day") or 0.0)
+        engagement_rate_pct = float(row.get("engagement_rate_pct") or 0.0)
+        signal_count = int(row.get("signal_post_count") or 0)
+        selection_reason = str(row.get("selection_reason") or "").strip()
         lines.append(
             f"{index}. @{username} | user_id={user_id} | score={score} | followers={followers if followers is not None else 'n/d'}"
         )
+        lines.append(
+            "Metricas: "
+            f"sinais={signal_count}, engaj={avg_engagement:.1f}, "
+            f"taxa={engagement_rate_pct:.2f}%, cadencia={cadence:.2f}/dia"
+        )
+        lines.append(f"URL: {row.get('profile_url') or 'n/d'}")
+        if selection_reason:
+            lines.append(f"Racional: {selection_reason}")
         lines.append(f"Acoes: /strategy_discover approve {candidate_id} | /strategy_discover reject {candidate_id}")
     return "\n".join(lines)
 
@@ -255,6 +308,8 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
         body = _render_strategy_discovery_reply(data)
     elif response.message == "strategy_discovery_not_ready":
         body = _render_strategy_discovery_reply(data)
+    elif response.message == "strategy_discovery_criteria":
+        body = _render_strategy_criteria_reply(data)
     elif response.message == "strategy_candidates_queue":
         body = _render_strategy_candidates_queue(data)
     elif response.message == "strategy_candidates_queue_empty":
@@ -288,7 +343,7 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
     elif response.message == "strategy_discovery_invalid_args":
         body = (
             "Uso invalido de strategy_discover.\n"
-            "Exemplos: /strategy_discover run | /strategy_discover queue | "
+            "Exemplos: /strategy_discover run | /strategy_discover criteria | /strategy_discover queue | "
             "/strategy_discover approve <candidate_id> | /strategy_discover reject <candidate_id>."
         )
     elif response.message == "strategy_report_empty":

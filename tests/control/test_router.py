@@ -180,6 +180,9 @@ def test_control_router_strategy_discover_queue_and_approve(monkeypatch, tmp_pat
                 score=78,
                 followers_count=1200,
                 signal_post_count=3,
+                avg_engagement=19.2,
+                cadence_per_day=1.6,
+                rationale_json='{"engagement_rate_pct": 1.20, "selection_reason": "score=78"}',
                 status="pending",
                 discovered_at=datetime(2026, 2, 21, 0, 0, tzinfo=timezone.utc),
             )
@@ -218,6 +221,8 @@ def test_control_router_strategy_discover_queue_and_approve(monkeypatch, tmp_pat
         assert queue_payload["message"] == "strategy_candidates_queue"
         assert queue_payload["data"]["count"] == 1
         assert queue_payload["data"]["items"][0]["candidate_id"] == "cand-123"
+        assert queue_payload["data"]["items"][0]["profile_url"] == "https://x.com/Tobby_scraper"
+        assert queue_payload["data"]["items"][0]["engagement_rate_pct"] == 1.2
 
         approve_response = context.client.post(
             f"/control/telegram/webhook/{context.workspace_id}",
@@ -237,6 +242,31 @@ def test_control_router_strategy_discover_queue_and_approve(monkeypatch, tmp_pat
         assert approve_payload["accepted"] is True
         assert approve_payload["message"] == "strategy_candidate_approved"
         assert approve_payload["data"]["candidate_id"] == "cand-123"
+    finally:
+        teardown_control_test_context()
+
+
+def test_control_router_strategy_discover_criteria(monkeypatch, tmp_path) -> None:
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 21014,
+                "message": {
+                    "message_id": 804,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": "/strategy_discover criteria",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "strategy_discovery_criteria"
+        assert payload["data"]["criteria"]["min_score"] >= 0
     finally:
         teardown_control_test_context()
 

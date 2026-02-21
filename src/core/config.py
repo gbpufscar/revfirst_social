@@ -78,9 +78,16 @@ class Settings(BaseSettings):
         "lang:en -is:retweet -is:reply"
     )
     x_strategy_discovery_max_results: int = 30
-    x_strategy_discovery_max_candidates: int = 8
+    x_strategy_discovery_max_candidates: int = 3
     x_strategy_candidate_min_followers: int = 100
     x_strategy_candidate_max_followers: int = 200000
+    x_strategy_candidate_min_score: int = 72
+    x_strategy_candidate_min_avg_engagement: float = 8.0
+    x_strategy_candidate_min_engagement_rate_pct: float = 0.4
+    x_strategy_candidate_min_cadence_per_day: float = 0.7
+    x_strategy_candidate_min_signal_posts: int = 2
+    x_strategy_candidate_min_recent_posts: int = 5
+    x_strategy_candidate_require_followers_in_band: bool = True
     publish_thread_cooldown_minutes: int = 45
     publish_author_cooldown_minutes: int = 30
     publish_max_text_chars: int = 280
@@ -183,6 +190,18 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("X_STRATEGY_CANDIDATE_MAX_FOLLOWERS must be positive.")
     if settings.x_strategy_candidate_max_followers < settings.x_strategy_candidate_min_followers:
         raise ValueError("X_STRATEGY_CANDIDATE_MAX_FOLLOWERS must be >= X_STRATEGY_CANDIDATE_MIN_FOLLOWERS.")
+    if settings.x_strategy_candidate_min_score < 0 or settings.x_strategy_candidate_min_score > 100:
+        raise ValueError("X_STRATEGY_CANDIDATE_MIN_SCORE must be between 0 and 100.")
+    if settings.x_strategy_candidate_min_avg_engagement < 0:
+        raise ValueError("X_STRATEGY_CANDIDATE_MIN_AVG_ENGAGEMENT must be zero or positive.")
+    if settings.x_strategy_candidate_min_engagement_rate_pct < 0:
+        raise ValueError("X_STRATEGY_CANDIDATE_MIN_ENGAGEMENT_RATE_PCT must be zero or positive.")
+    if settings.x_strategy_candidate_min_cadence_per_day < 0:
+        raise ValueError("X_STRATEGY_CANDIDATE_MIN_CADENCE_PER_DAY must be zero or positive.")
+    if settings.x_strategy_candidate_min_signal_posts < 0:
+        raise ValueError("X_STRATEGY_CANDIDATE_MIN_SIGNAL_POSTS must be zero or positive.")
+    if settings.x_strategy_candidate_min_recent_posts <= 0:
+        raise ValueError("X_STRATEGY_CANDIDATE_MIN_RECENT_POSTS must be positive.")
     return settings
 
 

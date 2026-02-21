@@ -7,7 +7,10 @@ from typing import TYPE_CHECKING
 from src.control.command_schema import ControlResponse
 from src.strategy.x_growth_strategy_agent import (
     approve_strategy_candidate,
+    build_x_profile_url,
+    get_strategy_discovery_criteria,
     list_pending_strategy_candidates,
+    parse_discovery_candidate_rationale,
     latest_workspace_strategy_report,
     reject_strategy_candidate,
     run_workspace_strategy_discovery,
@@ -92,25 +95,47 @@ def handle_discover(context: "CommandContext") -> ControlResponse:
         return ControlResponse(success=True, message="strategy_discovery_ok", data=result)
 
     subcommand = args[0].lower()
+    if subcommand in {"criteria", "criterios", "rules"}:
+        return ControlResponse(
+            success=True,
+            message="strategy_discovery_criteria",
+            data={
+                "workspace_id": workspace_id,
+                "criteria": get_strategy_discovery_criteria(),
+            },
+        )
+
     if subcommand in {"queue", "list"}:
         rows = list_pending_strategy_candidates(
             context.session,
             workspace_id=workspace_id,
             limit=10,
         )
-        items = [
-            {
-                "candidate_id": row.id,
-                "account_user_id": row.account_user_id,
-                "account_username": row.account_username,
-                "score": row.score,
-                "followers_count": row.followers_count,
-                "signal_post_count": row.signal_post_count,
-                "status": row.status,
-                "discovered_at": row.discovered_at.isoformat(),
-            }
-            for row in rows
-        ]
+        criteria = get_strategy_discovery_criteria()
+        items = []
+        for row in rows:
+            rationale = parse_discovery_candidate_rationale(row)
+            items.append(
+                {
+                    "candidate_id": row.id,
+                    "account_user_id": row.account_user_id,
+                    "account_username": row.account_username,
+                    "profile_url": build_x_profile_url(
+                        account_user_id=row.account_user_id,
+                        account_username=row.account_username,
+                    ),
+                    "score": row.score,
+                    "followers_count": row.followers_count,
+                    "signal_post_count": row.signal_post_count,
+                    "avg_engagement": getattr(row, "avg_engagement", None),
+                    "cadence_per_day": getattr(row, "cadence_per_day", None),
+                    "engagement_rate_pct": rationale.get("engagement_rate_pct"),
+                    "selection_reason": rationale.get("selection_reason"),
+                    "quality_checks": rationale.get("quality_checks"),
+                    "status": row.status,
+                    "discovered_at": row.discovered_at.isoformat(),
+                }
+            )
         message = "strategy_candidates_queue" if items else "strategy_candidates_queue_empty"
         return ControlResponse(
             success=True,
@@ -118,6 +143,7 @@ def handle_discover(context: "CommandContext") -> ControlResponse:
             data={
                 "workspace_id": workspace_id,
                 "count": len(items),
+                "criteria": criteria,
                 "items": items,
             },
         )

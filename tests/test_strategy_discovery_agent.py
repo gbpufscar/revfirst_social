@@ -58,6 +58,84 @@ class _FakeStrategyDiscoveryXClient:
                 "created_at": "2026-02-21T00:00:00Z",
                 "public_metrics": {"like_count": 18, "reply_count": 2, "retweet_count": 1, "quote_count": 0},
             },
+            {
+                "id": "p3",
+                "text": "post 3",
+                "created_at": "2026-02-20T12:00:00Z",
+                "public_metrics": {"like_count": 12, "reply_count": 1, "retweet_count": 1, "quote_count": 0},
+            },
+            {
+                "id": "p4",
+                "text": "post 4",
+                "created_at": "2026-02-19T12:00:00Z",
+                "public_metrics": {"like_count": 10, "reply_count": 1, "retweet_count": 0, "quote_count": 0},
+            },
+            {
+                "id": "p5",
+                "text": "post 5",
+                "created_at": "2026-02-18T12:00:00Z",
+                "public_metrics": {"like_count": 9, "reply_count": 1, "retweet_count": 0, "quote_count": 0},
+            },
+        ]
+
+
+class _FakeLowQualityStrategyDiscoveryXClient:
+    def search_open_calls(self, *, access_token: str, query: str | None = None, max_results: int = 20):  # noqa: ARG002
+        return {
+            "data": [
+                {"id": "t1", "author_id": "2002", "text": "building in public", "created_at": "2026-02-21T00:00:00Z"},
+            ],
+            "includes": {
+                "users": [
+                    {"id": "2002", "username": "low_quality_account", "name": "Low Quality"},
+                ]
+            },
+        }
+
+    def get_user_public_metrics(self, *, access_token: str, user_id: str):  # noqa: ARG002
+        assert user_id == "2002"
+        return {
+            "id": "2002",
+            "username": "low_quality_account",
+            "public_metrics": {
+                "followers_count": 350,
+                "tweet_count": 1200,
+            },
+        }
+
+    def get_user_recent_posts(self, *, access_token: str, user_id: str, max_results: int = 20):  # noqa: ARG002
+        assert user_id == "2002"
+        return [
+            {
+                "id": "lp1",
+                "text": "post 1",
+                "created_at": "2026-02-21T00:00:00Z",
+                "public_metrics": {"like_count": 1, "reply_count": 0, "retweet_count": 0, "quote_count": 0},
+            },
+            {
+                "id": "lp2",
+                "text": "post 2",
+                "created_at": "2026-02-20T12:00:00Z",
+                "public_metrics": {"like_count": 0, "reply_count": 0, "retweet_count": 0, "quote_count": 0},
+            },
+            {
+                "id": "lp3",
+                "text": "post 3",
+                "created_at": "2026-02-20T00:00:00Z",
+                "public_metrics": {"like_count": 1, "reply_count": 0, "retweet_count": 0, "quote_count": 0},
+            },
+            {
+                "id": "lp4",
+                "text": "post 4",
+                "created_at": "2026-02-19T12:00:00Z",
+                "public_metrics": {"like_count": 0, "reply_count": 0, "retweet_count": 0, "quote_count": 0},
+            },
+            {
+                "id": "lp5",
+                "text": "post 5",
+                "created_at": "2026-02-19T00:00:00Z",
+                "public_metrics": {"like_count": 1, "reply_count": 0, "retweet_count": 0, "quote_count": 0},
+            },
         ]
 
 
@@ -114,6 +192,52 @@ def test_strategy_discovery_creates_pending_candidates(monkeypatch) -> None:
             assert len(rows) == 1
             assert rows[0].account_user_id == "1001"
             assert rows[0].status == "pending"
+    finally:
+        get_token_key.cache_clear()
+        get_settings.cache_clear()
+
+
+def test_strategy_discovery_filters_low_quality_candidates(monkeypatch) -> None:
+    monkeypatch.setenv("TOKEN_ENCRYPTION_KEY", "Y4Cpe2s2aQvRIvF8y17kF8s0w58K7tY6xE8DAXmXGJQ=")
+    get_settings.cache_clear()
+    get_token_key.cache_clear()
+
+    session_factory = _build_sqlite_session_factory()
+    workspace_id = str(uuid.uuid4())
+    fake_x = _FakeLowQualityStrategyDiscoveryXClient()
+
+    try:
+        with session_factory() as session:
+            session.add(
+                Workspace(
+                    id=workspace_id,
+                    name=f"workspace-{uuid.uuid4()}",
+                    plan="free",
+                    subscription_status="active",
+                )
+            )
+            session.commit()
+            upsert_workspace_x_tokens(
+                session,
+                workspace_id=workspace_id,
+                access_token="workspace-access-token",
+                refresh_token="workspace-refresh-token",
+                scope="tweet.read users.read",
+            )
+
+            result = run_workspace_strategy_discovery(
+                session,
+                workspace_id=workspace_id,
+                x_client=fake_x,
+            )
+            assert result["status"] == "discovered"
+            assert result["pending_count"] == 0
+            assert result["discovered"] == 0
+            assert result["quality_rejected"] >= 1
+            assert result["candidates"] == []
+
+            rows = list_pending_strategy_candidates(session, workspace_id=workspace_id, limit=10)
+            assert rows == []
     finally:
         get_token_key.cache_clear()
         get_settings.cache_clear()

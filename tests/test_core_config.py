@@ -110,6 +110,20 @@ def test_rejects_invalid_scheduler_intervals(monkeypatch) -> None:
     with pytest.raises(ValueError, match="X_STRATEGY_CANDIDATE_MAX_FOLLOWERS"):
         get_settings()
 
+    monkeypatch.setenv("X_STRATEGY_CANDIDATE_MAX_FOLLOWERS", "200000")
+    monkeypatch.setenv("X_STRATEGY_CANDIDATE_MIN_SCORE", "120")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="X_STRATEGY_CANDIDATE_MIN_SCORE"):
+        get_settings()
+
+    monkeypatch.setenv("X_STRATEGY_CANDIDATE_MIN_SCORE", "72")
+    monkeypatch.setenv("X_STRATEGY_CANDIDATE_MIN_RECENT_POSTS", "0")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="X_STRATEGY_CANDIDATE_MIN_RECENT_POSTS"):
+        get_settings()
+
     get_settings.cache_clear()
 
 
