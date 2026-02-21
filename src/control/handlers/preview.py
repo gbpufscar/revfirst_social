@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.control.command_schema import ControlResponse
-from src.control.services import get_queue_item, parse_queue_metadata
+from src.control.services import QueueItemLookupError, get_queue_item, parse_queue_metadata
 
 if TYPE_CHECKING:
     from src.control.command_router import CommandContext
@@ -37,7 +37,14 @@ def handle(context: "CommandContext") -> ControlResponse:
         return ControlResponse(success=False, message="missing_queue_id", data={})
 
     queue_id = str(context.command.args[0]).strip()
-    item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
+    try:
+        item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
+    except QueueItemLookupError as exc:
+        return ControlResponse(
+            success=False,
+            message="queue_id_ambiguous",
+            data={"queue_id": queue_id, "candidates": exc.candidates},
+        )
     if item is None:
         return ControlResponse(success=False, message="queue_item_not_found", data={"queue_id": queue_id})
 
@@ -61,4 +68,3 @@ def handle(context: "CommandContext") -> ControlResponse:
         return ControlResponse(success=True, message="preview_ready", data=data)
 
     return ControlResponse(success=True, message="preview_image_unavailable", data=data)
-

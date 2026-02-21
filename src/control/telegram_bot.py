@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import Any, Dict, Optional
 from uuid import uuid4
@@ -44,59 +45,328 @@ def _truncate_text(value: str, *, limit: int) -> str:
     return normalized[: limit - 3].rstrip() + "..."
 
 
+def _safe_plain_text(value: str) -> str:
+    normalized = " ".join((value or "").split())
+    # We render plain text, but keep IDs in backticks; avoid accidental formatting in user content.
+    return normalized.replace("`", "'")
+
+
+def _short_queue_id(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return "sem-id"
+    return normalized[:8]
+
+
+def _queue_status_label(status: str) -> str:
+    mapping = {
+        "pending": "Pending Review",
+        "pending_review": "Pending Review",
+        "approved": "Approved Scheduled",
+        "approved_scheduled": "Approved Scheduled",
+        "publishing": "Publishing",
+        "published": "Published",
+        "rejected": "Rejected",
+        "failed": "Failed",
+    }
+    normalized = str(status or "").strip().lower()
+    return mapping.get(normalized, normalized or "Pending Review")
+
+
+def _format_hhmm_utc(raw_value: Any) -> str:
+    normalized = str(raw_value or "").strip()
+    if not normalized:
+        return "n/d"
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return "n/d"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed.strftime("%H:%M UTC")
+
+
+def _status_risk_level(*, mode: str, global_kill_switch: bool, telegram_status: str, recent_errors: int) -> str:
+    normalized_mode = str(mode or "").strip().lower()
+    normalized_telegram = str(telegram_status or "").strip().upper()
+    if global_kill_switch:
+        return "CRITICAL"
+    if normalized_mode == "containment":
+        return "HIGH"
+    if normalized_telegram == "DEGRADED":
+        return "HIGH"
+    if recent_errors > 0:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _render_approval_confirmation(data: Dict[str, Any]) -> str:
+    queue_id = str(data.get("queue_id") or "").strip()
+    short_id = _short_queue_id(queue_id)
+    scheduled_for = _format_hhmm_utc(data.get("scheduled_for"))
+    return (
+        "✅ APPROVED\n"
+        f"ID: `{short_id}`\n"
+        "\n"
+        "Scheduled For:\n"
+        f"{scheduled_for}\n"
+        "\n"
+        "Status:\n"
+        "Approved Scheduled\n"
+        "\n"
+        "Next Window:\n"
+        f"{scheduled_for}"
+    )
+
+
+def _render_publish_confirmation(data: Dict[str, Any]) -> str:
+    queue_id = str(data.get("queue_id") or "").strip()
+    short_id = _short_queue_id(queue_id)
+    external_post_id = str(data.get("external_post_id") or "n/d")
+    return (
+        "✅ PUBLISHED\n"
+        f"ID: `{short_id}`\n"
+        "\n"
+        "Status:\n"
+        "Published\n"
+        "\n"
+        "Post ID:\n"
+        f"{external_post_id}"
+    )
+
+
+def _render_alert(
+    *,
+    alert_type: str,
+    workspace: str,
+    action: str,
+    required: str,
+) -> str:
+    return (
+        "🚨 ALERT\n"
+        "Type:\n"
+        f"{alert_type}\n"
+        "\n"
+        "Workspace:\n"
+        f"{workspace}\n"
+        "\n"
+        "Action:\n"
+        f"{action}\n"
+        "\n"
+        "Required:\n"
+        f"{required}"
+    )
+
+
+def _render_reject_confirmation(data: Dict[str, Any], *, regenerated: bool) -> str:
+    queue_id = str(data.get("queue_id") or "").strip()
+    short_id = _short_queue_id(queue_id)
+    replacement = "Not generated"
+    if regenerated:
+        auto_regen = data.get("auto_regeneration") if isinstance(data.get("auto_regeneration"), dict) else {}
+        next_queue_id = str(auto_regen.get("queue_id") or "").strip()
+        replacement = f"Generated ({_short_queue_id(next_queue_id)})" if next_queue_id else "Generated"
+    return (
+        "❌ REJECTED\n"
+        f"ID: `{short_id}`\n"
+        "\n"
+        "Status:\n"
+        "Rejected\n"
+        "\n"
+        "Replacement Draft:\n"
+        f"{replacement}"
+    )
+
+
+def _render_stability_alert(data: Dict[str, Any], *, containment_mode: bool = False) -> str:
+    overall_status = str(data.get("overall_status") or "unknown").strip().lower()
+    workspace = str(data.get("workspace_id") or "revfirst")
+    critical_count = int(data.get("critical_count") or 0)
+    warning_count = int(data.get("warning_count") or 0)
+    recommended_actions = data.get("recommended_actions") if isinstance(data.get("recommended_actions"), list) else []
+    actions_applied = data.get("actions_applied") if isinstance(data.get("actions_applied"), list) else []
+    kill_switch_action = data.get("kill_switch_action") if isinstance(data.get("kill_switch_action"), dict) else {}
+
+    severity_label = {
+        "critical": "CRITICAL",
+        "warning": "HIGH",
+        "healthy": "LOW",
+    }.get(overall_status, "MEDIUM")
+    alert_type = f"Stability ({severity_label})"
+
+    action = (
+        f"Critical checks: {critical_count}; warning checks: {warning_count}."
+        if overall_status in {"critical", "warning"}
+        else "Stability checks healthy."
+    )
+    if containment_mode and actions_applied:
+        action = f"Containment applied: {', '.join(str(value) for value in actions_applied)}."
+    if kill_switch_action.get("applied"):
+        ttl_seconds = kill_switch_action.get("ttl_seconds")
+        action = f"Global kill-switch activated (ttl={ttl_seconds}s)."
+
+    if overall_status == "critical":
+        required = "/stability contain"
+    elif overall_status == "warning":
+        required = "/stability"
+    else:
+        required = "none"
+    if kill_switch_action.get("applied"):
+        required = "/ack_kill_switch"
+    if recommended_actions:
+        required = f"{required} | {str(recommended_actions[0])}" if required != "none" else str(recommended_actions[0])
+
+    return _render_alert(
+        alert_type=alert_type,
+        workspace=workspace,
+        action=action,
+        required=required,
+    )
+
+
+def _render_publish_failure_alert(data: Dict[str, Any]) -> str:
+    workspace = str(data.get("workspace_id") or "revfirst")
+    error = str(data.get("error") or "publish_failed")
+    publish_status = str(data.get("publish_status") or "").strip().lower()
+    normalized = error.lower()
+
+    alert_type = "Publish Failure"
+    action = error
+    required = "/preview <queue_id> e tentar novamente."
+
+    if publish_status == "blocked_plan" or "plan limit exceeded" in normalized or "blocked_plan" in normalized:
+        alert_type = "Plan Limit"
+        action = "Publishing blocked by plan quota."
+        required = "/metrics para revisar uso e ajustar plano."
+    elif publish_status == "blocked_rate_limit" or "blocked_rate_limit" in normalized or "rate limit" in normalized:
+        alert_type = "Rate Limit"
+        action = "Publishing blocked by hourly quota/rate limit."
+        required = "Aguardar janela e rodar /queue novamente."
+    elif (
+        publish_status == "blocked_circuit_breaker"
+        or "blocked_circuit_breaker" in normalized
+        or "circuit breaker" in normalized
+    ):
+        alert_type = "Circuit Breaker"
+        action = "Publishing blocked by consecutive failure breaker."
+        required = "/stability e diagnostico antes de retomar."
+    elif publish_status == "blocked_mode" or ("operational mode" in normalized and "containment" in normalized):
+        alert_type = "Containment"
+        action = "Publishing blocked by containment mode."
+        required = "Owner/admin com override apos diagnostico."
+
+    return _render_alert(
+        alert_type=alert_type,
+        workspace=workspace,
+        action=action,
+        required=required,
+    )
+
+
 def _render_queue_reply(data: Dict[str, Any]) -> str:
     items = data.get("items")
     if not isinstance(items, list) or not items:
-        return (
-            "Fila de aprovacao vazia.\n"
-            "Sugestao: rode /run daily_post ou /run propose_replies."
-        )
+        return "📋 Approval Queue is empty."
 
-    lines = [f"Fila de aprovacao ({len(items)} item(ns)):"]
-    for index, row in enumerate(items[:5], start=1):
+    sections = [f"📋 Approval Queue ({len(items)} items)"]
+    for row in items[:5]:
         if not isinstance(row, dict):
             continue
-        queue_id = str(row.get("queue_id") or row.get("id") or "sem-id")
+        queue_id = str(row.get("queue_id") or row.get("id") or "").strip()
+        short_id = _short_queue_id(queue_id)
         item_type = str(row.get("type") or "item").upper()
-        copy_text = _truncate_text(str(row.get("copy") or row.get("preview") or ""), limit=220)
+        copy_text = _truncate_text(
+            _safe_plain_text(str(row.get("copy") or row.get("preview") or "")),
+            limit=300,
+        )
         image_url = str(row.get("image_url") or "").strip()
-        lines.append(f"{index}. {item_type} | {queue_id}")
-        lines.append(f"Copy: {copy_text or '(vazio)'}")
-        lines.append(f"Imagem: {image_url if image_url else 'sem imagem'}")
-        lines.append(f"Acoes: /preview {queue_id} | /approve {queue_id} | /approve_now {queue_id}")
-    return "\n".join(lines)
+        status = _queue_status_label(str(row.get("status") or "pending_review"))
+        section = "\n".join(
+            [
+                f"📝 {item_type}",
+                f"ID: `{short_id}`",
+                "",
+                "Copy:",
+                copy_text or "(vazio)",
+                "",
+                "Imagem:",
+                image_url if image_url else "Sem imagem",
+                "",
+                "Status:",
+                status,
+                "",
+                "Ações principais:",
+                f"/approve {short_id}",
+                f"/reject {short_id}",
+                "",
+                "Ações avançadas:",
+                f"/preview {short_id}",
+                f"/approve_now {short_id}",
+            ]
+        )
+        sections.append(section)
+    return "\n\n".join(sections)
 
 
 def _render_status_reply(data: Dict[str, Any]) -> str:
     mode = str(data.get("mode") or "semi_autonomous")
-    paused = bool(data.get("paused"))
     global_kill_switch = bool(data.get("global_kill_switch"))
-    global_kill_ttl = data.get("global_kill_switch_ttl_seconds")
     telegram_status = str(data.get("telegram_status") or "UNKNOWN").upper()
     channels = data.get("channels") if isinstance(data.get("channels"), dict) else {}
     enabled_channels = sorted([name for name, is_enabled in channels.items() if bool(is_enabled)])
     last_runs = data.get("last_runs") if isinstance(data.get("last_runs"), dict) else {}
     editorial = data.get("editorial_stock") if isinstance(data.get("editorial_stock"), dict) else {}
-    last_run_summary = "nenhum"
-    if last_runs:
-        first_pipeline = sorted(last_runs.keys())[0]
-        pipeline_data = last_runs.get(first_pipeline)
-        if isinstance(pipeline_data, dict):
-            last_run_summary = f"{first_pipeline}={pipeline_data.get('status')}"
+    recent_errors = data.get("recent_errors") if isinstance(data.get("recent_errors"), list) else []
+
+    scheduler = "healthy"
+    daily_post_run = last_runs.get("daily_post") if isinstance(last_runs.get("daily_post"), dict) else {}
+    if str(daily_post_run.get("status") or "").strip().lower() == "failed":
+        scheduler = "degraded"
+
+    publishing = "enabled"
+    if mode in {"manual", "containment"} or global_kill_switch:
+        publishing = "disabled"
+    elif "x" not in enabled_channels:
+        publishing = "disabled"
+
+    pending_review = int(editorial.get("pending_review_count") or 0)
+    approved_scheduled = int(editorial.get("approved_scheduled_count") or 0)
+    next_window = _format_hhmm_utc(editorial.get("next_window_utc"))
+    coverage_days = float(editorial.get("coverage_days") or 0.0)
+
+    risk_level = _status_risk_level(
+        mode=mode,
+        global_kill_switch=global_kill_switch,
+        telegram_status=telegram_status,
+        recent_errors=len(recent_errors),
+    )
+
     return (
-        "Status do workspace:\n"
-        f"- Modo operacional: {mode}\n"
-        f"- Pausado: {'sim' if paused else 'nao'}\n"
-        f"- Telegram: {telegram_status}\n"
-        f"- Kill-switch global: {'ativo' if global_kill_switch else 'inativo'}"
-        f"{' (ttl=' + str(global_kill_ttl) + 's)' if global_kill_ttl is not None else ''}\n"
-        f"- Canais ativos: {', '.join(enabled_channels) if enabled_channels else 'nenhum'}\n"
-        f"- Pending Review: {int(editorial.get('pending_review_count') or 0)}\n"
-        f"- Approved Scheduled: {int(editorial.get('approved_scheduled_count') or 0)}\n"
-        f"- Next Window (UTC): {str(editorial.get('next_window_utc') or 'n/d')}\n"
-        f"- Coverage Days: {editorial.get('coverage_days') if editorial.get('coverage_days') is not None else '0.0'}\n"
-        f"- Ultimo run: {last_run_summary}\n"
-        "Proxima acao: use /queue para revisar pendencias."
+        "🔎 SYSTEM STATUS\n"
+        "----------------\n"
+        "\n"
+        "Mode:\n"
+        f"{mode}\n"
+        "\n"
+        "Scheduler:\n"
+        f"{scheduler}\n"
+        "\n"
+        "Publishing:\n"
+        f"{publishing}\n"
+        "\n"
+        "Queue:\n"
+        f"Pending Review: {pending_review}\n"
+        f"Approved Scheduled: {approved_scheduled}\n"
+        "\n"
+        "Next Window:\n"
+        f"{next_window}\n"
+        "\n"
+        "Coverage:\n"
+        f"{coverage_days:.2f} days\n"
+        "\n"
+        "Risk Level:\n"
+        f"{risk_level}"
     )
 
 
@@ -112,44 +382,6 @@ def _render_pipeline_reply(data: Dict[str, Any]) -> str:
         f"Tipos: {queued_types_text}\n"
         "Proxima acao: rode /queue e aprove os itens."
     )
-
-
-def _render_stability_reply(data: Dict[str, Any], *, containment_mode: bool = False) -> str:
-    overall_status = str(data.get("overall_status") or "unknown").strip().lower()
-    status_label = {
-        "healthy": "saudavel",
-        "warning": "atencao",
-        "critical": "critico",
-    }.get(overall_status, overall_status or "unknown")
-    critical_count = int(data.get("critical_count") or 0)
-    warning_count = int(data.get("warning_count") or 0)
-    recommended_actions = data.get("recommended_actions") if isinstance(data.get("recommended_actions"), list) else []
-    actions_applied = data.get("actions_applied") if isinstance(data.get("actions_applied"), list) else []
-
-    lines = [
-        "Stability guard:",
-        f"- Status geral: {status_label}",
-        f"- Checks criticos: {critical_count}",
-        f"- Checks em atencao: {warning_count}",
-    ]
-
-    if containment_mode:
-        if actions_applied:
-            lines.append(f"- Contencao aplicada: {', '.join(str(value) for value in actions_applied)}")
-        else:
-            lines.append("- Contencao aplicada: nenhuma")
-
-    kill_switch_action = data.get("kill_switch_action") if isinstance(data.get("kill_switch_action"), dict) else {}
-    if kill_switch_action.get("applied"):
-        ttl_seconds = kill_switch_action.get("ttl_seconds")
-        lines.append(f"- Kill-switch global: ativado (ttl={ttl_seconds}s)")
-
-    if recommended_actions:
-        lines.append(f"Acao sugerida: {str(recommended_actions[0])}")
-    else:
-        lines.append("Acao sugerida: manter monitoramento diario.")
-    lines.append("Proxima acao: rode /stability novamente apos ajuste.")
-    return "\n".join(lines)
 
 
 def _render_preview_reply(data: Dict[str, Any], *, with_image: bool) -> str:
@@ -365,19 +597,29 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
     elif response.message == "mode_invalid_args":
         body = "Uso: /mode ou /mode set <modo> [confirm]."
     elif response.message == "stability_report_ok":
-        body = _render_stability_reply(data, containment_mode=False)
+        body = _render_stability_alert(data, containment_mode=False)
     elif response.message == "stability_auto_containment_applied":
-        body = _render_stability_reply(data, containment_mode=True)
+        body = _render_stability_alert(data, containment_mode=True)
     elif response.message == "stability_kill_switch_applied":
-        body = _render_stability_reply(data, containment_mode=True)
+        body = _render_stability_alert(data, containment_mode=True)
     elif response.message == "stability_containment_applied":
-        body = _render_stability_reply(data, containment_mode=True)
+        body = _render_stability_alert(data, containment_mode=True)
     elif response.message == "stability_containment_not_required":
-        body = _render_stability_reply(data, containment_mode=True)
+        body = _render_stability_alert(data, containment_mode=True)
     elif response.message == "stability_containment_requires_admin":
-        body = "Contencao do stability guard exige owner/admin."
+        body = _render_alert(
+            alert_type="Containment Authorization",
+            workspace=str(data.get("workspace_id") or "revfirst"),
+            action="Containment command blocked for current user.",
+            required="Use owner/admin account.",
+        )
     elif response.message == "stability_invalid_args":
-        body = "Uso: /stability ou /stability contain."
+        body = _render_alert(
+            alert_type="Command Usage",
+            workspace=str(data.get("workspace_id") or "revfirst"),
+            action="Invalid stability command arguments.",
+            required="/stability ou /stability contain",
+        )
     elif response.message == "kill_switch_acknowledged":
         body = (
             "Kill-switch global reconhecido.\n"
@@ -447,47 +689,26 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
     elif response.message == "strategy_scan_not_ready":
         body = _render_strategy_scan_reply(data)
     elif response.message == "approved_and_published":
-        queue_id = data.get("queue_id")
-        external_post_id = data.get("external_post_id")
-        body = (
-            "Publicado com sucesso.\n"
-            f"queue_id: {queue_id}\n"
-            f"post_id: {external_post_id}\n"
-            "Proxima acao: rode /queue para o proximo item."
-        )
+        body = _render_publish_confirmation(data)
     elif response.message == "approved_scheduled":
-        queue_id = data.get("queue_id")
-        scheduled_for = data.get("scheduled_for") or "n/d"
-        window_key = data.get("window_key") or "n/d"
-        body = (
-            "Aprovado e agendado.\n"
-            f"queue_id: {queue_id}\n"
-            f"scheduled_for_utc: {scheduled_for}\n"
-            f"window_key: {window_key}\n"
-            "Proxima acao: aguarde janela de publicacao ou use /approve_now para publicar imediato."
-        )
+        body = _render_approval_confirmation(data)
     elif response.message == "approve_publish_failed":
-        queue_id = data.get("queue_id")
-        error = data.get("error") or response.message
-        body = (
-            "Falha ao publicar item aprovado.\n"
-            f"queue_id: {queue_id}\n"
-            f"erro: {error}\n"
-            "Proxima acao: revise /preview <queue_id> e tente novamente."
-        )
+        body = _render_publish_failure_alert(data)
     elif response.message == "queue_item_rejected_regenerated":
-        auto_regen = data.get("auto_regeneration") if isinstance(data.get("auto_regeneration"), dict) else {}
-        body = (
-            "Item rejeitado e regeneracao automatica executada.\n"
-            f"queue_id_rejeitado: {data.get('queue_id')}\n"
-            f"novo_queue_id: {auto_regen.get('queue_id')}\n"
-            f"draft_id: {auto_regen.get('draft_id')}\n"
-            "Proxima acao: rode /queue para revisar o novo rascunho."
-        )
+        body = _render_reject_confirmation(data, regenerated=True)
+    elif response.message == "queue_item_rejected":
+        body = _render_reject_confirmation(data, regenerated=False)
     elif response.message == "no_pending_queue_item":
         body = "Nao ha item pendente para aprovar. Use /queue para verificar."
     elif response.message == "missing_queue_id":
         body = "Informe o queue_id. Exemplo: /approve <queue_id>, /approve_now <queue_id> ou /preview <queue_id>."
+    elif response.message == "queue_id_ambiguous":
+        candidates = data.get("candidates") if isinstance(data.get("candidates"), list) else []
+        body = (
+            "Queue ID curto ambiguo.\n"
+            f"Candidatos: {', '.join(str(value) for value in candidates) if candidates else 'n/d'}\n"
+            "Use o queue_id completo."
+        )
     elif response.message == "unknown_command":
         body = "Comando nao reconhecido. Use /help para ver comandos disponiveis."
     elif response.message == "unauthorized":

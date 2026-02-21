@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from src.control.command_schema import ControlResponse
 from src.control.queue_executor import execute_queue_item_now
 from src.control.services import (
+    QueueItemLookupError,
     create_queue_item,
     get_queue_item,
     list_pending_queue_items,
@@ -54,15 +55,21 @@ def _owner_override_requested(context: "CommandContext") -> bool:
     return bool(flags.intersection({"override", "--override", "owner_override=true"}))
 
 
-def _resolve_queue_item(context: "CommandContext") -> tuple[ApprovalQueueItem | None, str | None]:
+def _resolve_queue_item(
+    context: "CommandContext",
+) -> tuple[ApprovalQueueItem | None, str | None, Dict[str, Any] | None]:
     workspace_id = context.envelope.workspace_id
     queue_id = _require_queue_id(context)
     if queue_id:
-        return get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id), queue_id
+        try:
+            item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
+        except QueueItemLookupError as exc:
+            return None, queue_id, {"message": "queue_id_ambiguous", "candidates": exc.candidates}
+        return item, queue_id, None
 
     latest_pending = list_pending_queue_items(context.session, workspace_id=workspace_id, limit=1)
     item = latest_pending[0] if latest_pending else None
-    return item, (item.id if item is not None else None)
+    return item, (item.id if item is not None else None), None
 
 
 def _scheduled_payload(item: ApprovalQueueItem) -> Dict[str, Any]:
@@ -83,9 +90,15 @@ def _scheduled_payload(item: ApprovalQueueItem) -> Dict[str, Any]:
 
 
 def _handle_schedule(context: "CommandContext") -> ControlResponse:
-    item, queue_id = _resolve_queue_item(context)
+    item, queue_id, lookup_error = _resolve_queue_item(context)
     if queue_id is None:
         return ControlResponse(success=False, message="no_pending_queue_item", data={})
+    if lookup_error is not None:
+        return ControlResponse(
+            success=False,
+            message=str(lookup_error["message"]),
+            data={"queue_id": queue_id, "candidates": lookup_error.get("candidates") or []},
+        )
     if item is None:
         return ControlResponse(success=False, message="queue_item_not_found", data={"queue_id": queue_id})
 
@@ -132,9 +145,15 @@ def _handle_publish_now(context: "CommandContext") -> ControlResponse:
     workspace_id = context.envelope.workspace_id
     owner_override = _owner_override_requested(context)
 
-    item, queue_id = _resolve_queue_item(context)
+    item, queue_id, lookup_error = _resolve_queue_item(context)
     if queue_id is None:
         return ControlResponse(success=False, message="no_pending_queue_item", data={})
+    if lookup_error is not None:
+        return ControlResponse(
+            success=False,
+            message=str(lookup_error["message"]),
+            data={"queue_id": queue_id, "candidates": lookup_error.get("candidates") or []},
+        )
     if item is None:
         return ControlResponse(success=False, message="queue_item_not_found", data={"queue_id": queue_id})
 
@@ -407,7 +426,14 @@ def handle_reject(context: "CommandContext") -> ControlResponse:
     if not queue_id:
         return ControlResponse(success=False, message="missing_queue_id", data={})
 
-    item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
+    try:
+        item = get_queue_item(context.session, workspace_id=workspace_id, queue_item_id=queue_id)
+    except QueueItemLookupError as exc:
+        return ControlResponse(
+            success=False,
+            message="queue_id_ambiguous",
+            data={"queue_id": queue_id, "candidates": exc.candidates},
+        )
     if item is None:
         return ControlResponse(success=False, message="queue_item_not_found", data={"queue_id": queue_id})
 

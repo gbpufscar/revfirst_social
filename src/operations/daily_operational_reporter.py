@@ -49,6 +49,20 @@ def _window_start(now: datetime) -> datetime:
     return now - timedelta(hours=24)
 
 
+def _format_hhmm_utc(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "n/d"
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return "n/d"
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc)
+    return parsed.strftime("%H:%M UTC")
+
+
 def classify_risk_level(
     *,
     stability_critical_count: int,
@@ -326,45 +340,51 @@ def format_daily_operational_report(snapshot: Dict[str, Any]) -> str:
     x_rate = snapshot.get("x_rate_limits") if isinstance(snapshot.get("x_rate_limits"), dict) else {}
     redis = snapshot.get("redis") if isinstance(snapshot.get("redis"), dict) else {}
     risk = str(snapshot.get("risk_assessment") or "LOW")
+    next_window = _format_hhmm_utc(editorial.get("next_window_utc"))
+    coverage = editorial.get("coverage_days") if editorial.get("coverage_days") is not None else "0.0"
 
     return (
-        "DAILY OPERATIONAL REPORT\n"
-        "------------------------\n"
-        f"Date: {date_utc} (UTC)\n"
+        "📊 DAILY OPERATIONAL REPORT\n"
+        "----------------------------\n"
         "\n"
-        f"Mode: {mode}\n"
+        "Date:\n"
+        f"{date_utc} (UTC)\n"
         "\n"
-        "Editorial Stock:\n"
-        f"  Pending Review: {int(editorial.get('pending_review_count') or 0)}\n"
-        f"  Approved Scheduled: {int(editorial.get('approved_scheduled_count') or 0)}\n"
-        f"  Next Window (UTC): {str(editorial.get('next_window_utc') or 'n/d')}\n"
-        f"  Coverage Days: {editorial.get('coverage_days') if editorial.get('coverage_days') is not None else '0.0'}\n"
-        "\n"
-        "Stability:\n"
-        f"  Reports: {int(stability.get('reports') or 0)}\n"
-        f"  CRITICAL: {int(stability.get('critical') or 0)}\n"
-        f"  HIGH: {int(stability.get('high') or 0)}\n"
-        f"  Auto-Containments: {int(stability.get('auto_containments') or 0)}\n"
-        f"  Kill-Switch: {int(stability.get('kill_switch') or 0)}\n"
+        "Mode:\n"
+        f"{mode}\n"
         "\n"
         "Publishing:\n"
-        f"  Attempts: {int(publishing.get('attempts') or 0)}\n"
-        f"  Success: {int(publishing.get('success') or 0)}\n"
-        f"  Failures: {int(publishing.get('failures') or 0)}\n"
-        f"  Success Rate: {int(publishing.get('success_rate_pct') or 0)}%\n"
+        f"Attempts: {int(publishing.get('attempts') or 0)}\n"
+        f"Success: {int(publishing.get('success') or 0)}\n"
+        f"Failures: {int(publishing.get('failures') or 0)}\n"
+        f"Success Rate: {int(publishing.get('success_rate_pct') or 0)}%\n"
+        "\n"
+        "Editorial Stock:\n"
+        f"Pending Review: {int(editorial.get('pending_review_count') or 0)}\n"
+        f"Approved Scheduled: {int(editorial.get('approved_scheduled_count') or 0)}\n"
+        f"Next Window: {next_window}\n"
+        f"Coverage: {coverage} days\n"
+        "\n"
+        "Stability:\n"
+        f"Reports: {int(stability.get('reports') or 0)}\n"
+        f"Critical: {int(stability.get('critical') or 0)}\n"
+        f"High: {int(stability.get('high') or 0)}\n"
+        f"Containments: {int(stability.get('auto_containments') or 0)}\n"
+        f"Kill-Switch: {int(stability.get('kill_switch') or 0)}\n"
         "\n"
         "Circuit Breakers:\n"
-        f"  Rate Limit Blocks: {int(circuit.get('rate_limit_blocks') or 0)}\n"
-        f"  Consecutive Failure Triggers: {int(circuit.get('consecutive_failure_triggers') or 0)}\n"
+        f"Rate Limit Blocks: {int(circuit.get('rate_limit_blocks') or 0)}\n"
+        f"Consecutive Failure Triggers: {int(circuit.get('consecutive_failure_triggers') or 0)}\n"
         "\n"
         "Rate Limits (X):\n"
-        f"  429 Responses: {int(x_rate.get('http_429_count') or 0)}\n"
+        f"429 Responses: {int(x_rate.get('http_429_count') or 0)}\n"
         "\n"
         "Redis:\n"
-        f"  Active Locks: {int(redis.get('active_locks') or 0)}\n"
-        f"  TTL Anomalies: {int(redis.get('ttl_anomalies') or 0)}\n"
+        f"Active Locks: {int(redis.get('active_locks') or 0)}\n"
+        f"TTL Anomalies: {int(redis.get('ttl_anomalies') or 0)}\n"
         "\n"
-        f"Risk Assessment: {risk}"
+        "Risk Assessment:\n"
+        f"{risk}"
     )
 
 

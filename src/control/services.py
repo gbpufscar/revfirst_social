@@ -49,6 +49,15 @@ _ALLOWED_CHANNELS = set(_DEFAULT_CHANNELS.keys())
 _ALLOWED_QUEUE_TYPES = {"reply", "post", "email", "blog", "instagram"}
 
 
+class QueueItemLookupError(ValueError):
+    """Raised when a queue item reference cannot be uniquely resolved."""
+
+    def __init__(self, *, queue_item_id: str, candidates: list[str]) -> None:
+        super().__init__("ambiguous_queue_id")
+        self.queue_item_id = queue_item_id
+        self.candidates = candidates
+
+
 def normalize_operational_mode(value: str | None) -> str:
     normalized = str(value or "").strip().lower()
     if normalized in VALID_OPERATIONAL_MODES:
@@ -349,11 +358,41 @@ def create_queue_item(
 
 
 def get_queue_item(session: Session, *, workspace_id: str, queue_item_id: str) -> Optional[ApprovalQueueItem]:
-    return session.scalar(
+    normalized = str(queue_item_id or "").strip()
+    if not normalized:
+        return None
+
+    exact = session.scalar(
         select(ApprovalQueueItem).where(
             ApprovalQueueItem.workspace_id == workspace_id,
-            ApprovalQueueItem.id == queue_item_id,
+            ApprovalQueueItem.id == normalized,
         )
+    )
+    if exact is not None:
+        return exact
+
+    if len(normalized) < 8:
+        return None
+
+    matches = list(
+        session.scalars(
+            select(ApprovalQueueItem)
+            .where(
+                ApprovalQueueItem.workspace_id == workspace_id,
+                ApprovalQueueItem.id.like(f"{normalized}%"),
+            )
+            .order_by(desc(ApprovalQueueItem.created_at))
+            .limit(6)
+        ).all()
+    )
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    raise QueueItemLookupError(
+        queue_item_id=normalized,
+        candidates=[item.id[:8] for item in matches[:5]],
     )
 
 
