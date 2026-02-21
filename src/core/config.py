@@ -91,6 +91,8 @@ class Settings(BaseSettings):
     publish_thread_cooldown_minutes: int = 45
     publish_author_cooldown_minutes: int = 30
     publish_max_text_chars: int = 280
+    max_replies_per_hour: int = 8
+    max_consecutive_publish_failures: int = 3
     publishing_direct_api_enabled: bool = False
     publishing_direct_api_internal_key: str = ""
     scheduler_workspace_lock_ttl_seconds: int = 300
@@ -189,6 +191,10 @@ def _validate(settings: Settings) -> Settings:
         raise ValueError("X_REQUIRED_PUBLISH_SCOPE must not be empty.")
     if settings.publishing_direct_api_enabled and not settings.publishing_direct_api_internal_key.strip():
         raise ValueError("PUBLISHING_DIRECT_API_INTERNAL_KEY is required when PUBLISHING_DIRECT_API_ENABLED=true.")
+    if settings.max_replies_per_hour < 0:
+        raise ValueError("MAX_REPLIES_PER_HOUR must be zero or positive.")
+    if settings.max_consecutive_publish_failures < 0:
+        raise ValueError("MAX_CONSECUTIVE_PUBLISH_FAILURES must be zero or positive.")
     if settings.scheduler_candidate_evaluation_limit <= 0:
         raise ValueError("SCHEDULER_CANDIDATE_EVALUATION_LIMIT must be positive.")
     if settings.scheduler_daily_post_interval_hours <= 0:

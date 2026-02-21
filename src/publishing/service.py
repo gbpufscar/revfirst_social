@@ -8,6 +8,7 @@ import json
 from typing import Any, Dict, Optional
 import uuid
 
+import httpx
 from src.channels.base import ChannelPayload
 from src.channels.blog.publisher import BlogPublisher
 from src.channels.email.publisher import EmailPublisher
@@ -16,7 +17,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from src.billing.plans import check_plan_limit, record_usage
-from src.control.services import get_workspace_operational_mode, publishing_allowed_for_mode
+from src.control.security import load_admin_directory
+from src.control.services import (
+    get_workspace_operational_mode,
+    publishing_allowed_for_mode,
+    set_operational_mode,
+    set_pause_state,
+)
+from src.control.state import is_workspace_paused, set_workspace_paused
 from src.core.config import get_settings
 from src.core.metrics import (
     record_publish_error,
@@ -26,6 +34,7 @@ from src.core.metrics import (
 from src.integrations.x.service import get_workspace_x_access_token
 from src.integrations.x.x_client import XClient, XClientError
 from src.storage.models import PublishAuditLog, PublishCooldown, WorkspaceEvent
+from src.storage.redis_client import get_client as get_redis_client
 
 
 @dataclass(frozen=True)
@@ -155,6 +164,361 @@ def _mode_block_message(mode: str) -> str:
     return f"Publishing blocked by operational mode: {mode}"
 
 
+_REPLY_HOURLY_COUNTER_KEY = "revfirst:{workspace_id}:publishing:replies:{hour_bucket}"
+_CONSECUTIVE_FAILURE_COUNTER_KEY = "revfirst:{workspace_id}:publishing:consecutive_failures"
+_CONSECUTIVE_FAILURE_ALERT_KEY = "revfirst:{workspace_id}:publishing:circuit_breaker_alert"
+_CONSECUTIVE_FAILURE_COUNTER_TTL_SECONDS = 86400
+_CONSECUTIVE_FAILURE_ALERT_TTL_SECONDS = 1800
+
+
+def _get_redis_client_safe():
+    try:
+        return get_redis_client()
+    except Exception:
+        return None
+
+
+def _redis_get_int(redis_client: Any, key: str) -> int:
+    try:
+        value = redis_client.get(key)
+        if value is None:
+            return 0
+        return int(value)
+    except Exception:
+        return 0
+
+
+def _utc_hour_bucket(now: datetime) -> str:
+    return now.strftime("%Y%m%d%H")
+
+
+def _seconds_until_next_hour(now: datetime) -> int:
+    base = now.replace(minute=0, second=0, microsecond=0)
+    next_hour = base + timedelta(hours=1)
+    return max(1, int((next_hour - now).total_seconds()))
+
+
+def _reply_hour_counter_key(*, workspace_id: str, now: datetime) -> str:
+    return _REPLY_HOURLY_COUNTER_KEY.format(workspace_id=workspace_id, hour_bucket=_utc_hour_bucket(now))
+
+
+def _failure_counter_key(*, workspace_id: str) -> str:
+    return _CONSECUTIVE_FAILURE_COUNTER_KEY.format(workspace_id=workspace_id)
+
+
+def _failure_alert_key(*, workspace_id: str) -> str:
+    return _CONSECUTIVE_FAILURE_ALERT_KEY.format(workspace_id=workspace_id)
+
+
+def _get_consecutive_publish_failures(workspace_id: str) -> int:
+    redis_client = _get_redis_client_safe()
+    if redis_client is None:
+        return 0
+    return _redis_get_int(redis_client, _failure_counter_key(workspace_id=workspace_id))
+
+
+def _increment_consecutive_publish_failures(workspace_id: str) -> int | None:
+    redis_client = _get_redis_client_safe()
+    if redis_client is None:
+        return None
+    key = _failure_counter_key(workspace_id=workspace_id)
+    try:
+        failures = int(redis_client.incr(key))
+        if failures == 1:
+            redis_client.expire(key, _CONSECUTIVE_FAILURE_COUNTER_TTL_SECONDS)
+        return failures
+    except Exception:
+        return None
+
+
+def _reset_consecutive_publish_failures(workspace_id: str) -> None:
+    redis_client = _get_redis_client_safe()
+    if redis_client is None:
+        return
+    try:
+        redis_client.delete(_failure_counter_key(workspace_id=workspace_id))
+        redis_client.delete(_failure_alert_key(workspace_id=workspace_id))
+    except Exception:
+        return
+
+
+def _increment_reply_hour_counter(workspace_id: str) -> int | None:
+    settings = get_settings()
+    if settings.max_replies_per_hour <= 0:
+        return None
+
+    redis_client = _get_redis_client_safe()
+    if redis_client is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    key = _reply_hour_counter_key(workspace_id=workspace_id, now=now)
+    ttl_seconds = _seconds_until_next_hour(now) + 5
+    try:
+        count = int(redis_client.incr(key))
+        if count == 1:
+            redis_client.expire(key, ttl_seconds)
+        return count
+    except Exception:
+        return None
+
+
+def _send_publish_circuit_breaker_alert(
+    *,
+    workspace_id: str,
+    action: str,
+    failures: int,
+    threshold: int,
+    error_message: str,
+    actions_applied: list[str],
+) -> None:
+    settings = get_settings()
+    token = settings.telegram_bot_token.strip()
+    if not token:
+        return
+
+    directory = load_admin_directory()
+    recipients = sorted(directory.allowed_telegram_ids)
+    if not recipients:
+        return
+
+    lines = [
+        "[RevFirst] Circuit breaker de publicacao ativado",
+        f"workspace: {workspace_id}",
+        f"acao: {action}",
+        f"falhas consecutivas: {failures} (limite={threshold})",
+        f"erro recente: {error_message or 'n/d'}",
+        f"contencao: {', '.join(actions_applied) if actions_applied else 'nenhuma'}",
+        "acao: owner pode publicar com override apos diagnostico.",
+    ]
+    message = "\n".join(lines)[:4096]
+    with httpx.Client(timeout=10) as client:
+        for chat_id in recipients:
+            try:
+                client.post(
+                    f"https://api.telegram.org/bot{token}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": message,
+                        "disable_web_page_preview": True,
+                    },
+                )
+            except Exception:
+                continue
+
+
+def _apply_publish_failure_containment(
+    session: Session,
+    *,
+    workspace_id: str,
+    action: str,
+    failure_count: int,
+    threshold: int,
+    error_message: str,
+) -> None:
+    redis_client = _get_redis_client_safe()
+    if redis_client is None:
+        return
+
+    actions_applied: list[str] = []
+    paused = is_workspace_paused(redis_client, workspace_id=workspace_id)
+    mode = get_workspace_operational_mode(session, workspace_id=workspace_id, redis_client=redis_client)
+
+    if not paused:
+        set_pause_state(session, workspace_id=workspace_id, paused=True)
+        set_workspace_paused(redis_client, workspace_id=workspace_id, paused=True)
+        actions_applied.append("workspace_paused")
+
+    if mode != "containment":
+        set_operational_mode(
+            session,
+            workspace_id=workspace_id,
+            mode="containment",
+            changed_by_user_id=None,
+            redis_client=redis_client,
+        )
+        actions_applied.append("mode_containment")
+
+    session.add(
+        WorkspaceEvent(
+            workspace_id=workspace_id,
+            event_type="publishing_circuit_breaker_triggered",
+            payload_json=_json_dumps(
+                {
+                    "action": action,
+                    "failure_count": failure_count,
+                    "threshold": threshold,
+                    "error_message": error_message,
+                    "actions_applied": actions_applied,
+                }
+            ),
+        )
+    )
+    session.commit()
+
+    should_alert = True
+    alert_key = _failure_alert_key(workspace_id=workspace_id)
+    try:
+        should_alert = bool(
+            redis_client.set(
+                alert_key,
+                "true",
+                nx=True,
+                ex=_CONSECUTIVE_FAILURE_ALERT_TTL_SECONDS,
+            )
+        )
+    except Exception:
+        should_alert = True
+
+    if should_alert:
+        _send_publish_circuit_breaker_alert(
+            workspace_id=workspace_id,
+            action=action,
+            failures=failure_count,
+            threshold=threshold,
+            error_message=error_message,
+            actions_applied=actions_applied,
+        )
+
+
+def _register_publish_failure(
+    session: Session,
+    *,
+    workspace_id: str,
+    action: str,
+    error_message: str,
+) -> None:
+    settings = get_settings()
+    threshold = settings.max_consecutive_publish_failures
+    if threshold <= 0:
+        return
+
+    failure_count = _increment_consecutive_publish_failures(workspace_id)
+    if failure_count is None:
+        return
+    if failure_count < threshold:
+        return
+
+    _apply_publish_failure_containment(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        failure_count=failure_count,
+        threshold=threshold,
+        error_message=error_message,
+    )
+
+
+def _guard_consecutive_failure_breaker(
+    session: Session,
+    *,
+    workspace_id: str,
+    action: str,
+    text: str,
+    platform: str,
+    owner_override: bool = False,
+    in_reply_to_tweet_id: Optional[str] = None,
+    target_thread_id: Optional[str] = None,
+    target_author_id: Optional[str] = None,
+) -> Optional[PublishResult]:
+    settings = get_settings()
+    threshold = settings.max_consecutive_publish_failures
+    if threshold <= 0 or owner_override:
+        return None
+
+    failures = _get_consecutive_publish_failures(workspace_id)
+    if failures < threshold:
+        return None
+
+    message = (
+        f"Publishing blocked by circuit breaker ({failures} consecutive failures, threshold={threshold}). "
+        "Use owner override after investigation."
+    )
+    if action == "publish_reply":
+        record_reply_blocked(workspace_id=workspace_id, reason="circuit_breaker")
+    _create_audit_log(
+        session,
+        platform=platform,
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        status="blocked_circuit_breaker",
+        in_reply_to_tweet_id=in_reply_to_tweet_id,
+        target_thread_id=target_thread_id,
+        target_author_id=target_author_id,
+        error_message=message,
+        payload={
+            "consecutive_failures": failures,
+            "threshold": threshold,
+        },
+    )
+    session.commit()
+    return PublishResult(
+        workspace_id=workspace_id,
+        action=action,
+        published=False,
+        external_post_id=None,
+        status="blocked_circuit_breaker",
+        message=message,
+    )
+
+
+def _guard_reply_hour_quota(
+    session: Session,
+    *,
+    workspace_id: str,
+    action: str,
+    text: str,
+    in_reply_to_tweet_id: str,
+    thread_id: Optional[str],
+    target_author_id: Optional[str],
+    owner_override: bool = False,
+) -> Optional[PublishResult]:
+    settings = get_settings()
+    limit = settings.max_replies_per_hour
+    if limit <= 0 or owner_override:
+        return None
+
+    redis_client = _get_redis_client_safe()
+    if redis_client is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    key = _reply_hour_counter_key(workspace_id=workspace_id, now=now)
+    used = _redis_get_int(redis_client, key)
+    if used < limit:
+        return None
+
+    record_reply_blocked(workspace_id=workspace_id, reason="hour_quota")
+    message = f"Reply hourly quota exceeded ({used}/{limit})."
+    _create_audit_log(
+        session,
+        platform="x",
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        status="blocked_rate_limit",
+        in_reply_to_tweet_id=in_reply_to_tweet_id,
+        target_thread_id=thread_id,
+        target_author_id=target_author_id,
+        error_message=message,
+        payload={
+            "max_replies_per_hour": limit,
+            "used_current_hour": used,
+            "hour_bucket_utc": _utc_hour_bucket(now),
+        },
+    )
+    session.commit()
+    return PublishResult(
+        workspace_id=workspace_id,
+        action=action,
+        published=False,
+        external_post_id=None,
+        status="blocked_rate_limit",
+        message=message,
+    )
+
+
 def _guard_operational_mode(
     session: Session,
     *,
@@ -206,7 +570,6 @@ def publish_reply(
     x_client: XClient,
     owner_override: bool = False,
 ) -> PublishResult:
-    settings = get_settings()
     action = "publish_reply"
     mode_block = _guard_operational_mode(
         session,
@@ -222,6 +585,34 @@ def publish_reply(
     if mode_block is not None:
         return mode_block
 
+    breaker_block = _guard_consecutive_failure_breaker(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        platform="x",
+        owner_override=owner_override,
+        in_reply_to_tweet_id=in_reply_to_tweet_id,
+        target_thread_id=thread_id,
+        target_author_id=target_author_id,
+    )
+    if breaker_block is not None:
+        return breaker_block
+
+    quota_block = _guard_reply_hour_quota(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        in_reply_to_tweet_id=in_reply_to_tweet_id,
+        thread_id=thread_id,
+        target_author_id=target_author_id,
+        owner_override=owner_override,
+    )
+    if quota_block is not None:
+        return quota_block
+
+    settings = get_settings()
     token = get_workspace_x_access_token(session, workspace_id=workspace_id)
     if token is None:
         record_publish_error(workspace_id=workspace_id, channel="x")
@@ -238,6 +629,12 @@ def publish_reply(
             error_message="Workspace X OAuth is missing or expired",
         )
         session.commit()
+        _register_publish_failure(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            error_message="Workspace X OAuth is missing or expired",
+        )
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -400,6 +797,8 @@ def publish_reply(
             )
         )
         session.commit()
+        _increment_reply_hour_counter(workspace_id)
+        _reset_consecutive_publish_failures(workspace_id)
         record_replies_published(workspace_id=workspace_id)
         return PublishResult(
             workspace_id=workspace_id,
@@ -425,6 +824,12 @@ def publish_reply(
             error_message=str(exc),
         )
         session.commit()
+        _register_publish_failure(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            error_message=str(exc),
+        )
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -449,6 +854,12 @@ def publish_reply(
             error_message="unexpected_publish_error",
         )
         session.commit()
+        _register_publish_failure(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            error_message="unexpected_publish_error",
+        )
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -478,6 +889,18 @@ def publish_post(
     )
     if mode_block is not None:
         return mode_block
+
+    breaker_block = _guard_consecutive_failure_breaker(
+        session,
+        workspace_id=workspace_id,
+        action=action,
+        text=text,
+        platform="x",
+        owner_override=owner_override,
+    )
+    if breaker_block is not None:
+        return breaker_block
+
     token = get_workspace_x_access_token(session, workspace_id=workspace_id)
     if token is None:
         record_publish_error(workspace_id=workspace_id, channel="x")
@@ -491,6 +914,12 @@ def publish_post(
             error_message="Workspace X OAuth is missing or expired",
         )
         session.commit()
+        _register_publish_failure(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            error_message="Workspace X OAuth is missing or expired",
+        )
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -559,6 +988,7 @@ def publish_post(
             )
         )
         session.commit()
+        _reset_consecutive_publish_failures(workspace_id)
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -580,6 +1010,12 @@ def publish_post(
             error_message=str(exc),
         )
         session.commit()
+        _register_publish_failure(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            error_message=str(exc),
+        )
         return PublishResult(
             workspace_id=workspace_id,
             action=action,
@@ -601,6 +1037,12 @@ def publish_post(
             error_message="unexpected_publish_error",
         )
         session.commit()
+        _register_publish_failure(
+            session,
+            workspace_id=workspace_id,
+            action=action,
+            error_message="unexpected_publish_error",
+        )
         return PublishResult(
             workspace_id=workspace_id,
             action=action,

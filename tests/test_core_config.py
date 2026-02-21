@@ -140,6 +140,25 @@ def test_requires_internal_publish_key_when_direct_api_enabled(monkeypatch) -> N
     get_settings.cache_clear()
 
 
+def test_rejects_invalid_publish_circuit_breaker_thresholds(monkeypatch) -> None:
+    monkeypatch.setenv("ENV", "development")
+    monkeypatch.setenv("SECRET_KEY", "test-secret")
+    monkeypatch.setenv("MAX_REPLIES_PER_HOUR", "-1")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="MAX_REPLIES_PER_HOUR"):
+        get_settings()
+
+    monkeypatch.setenv("MAX_REPLIES_PER_HOUR", "8")
+    monkeypatch.setenv("MAX_CONSECUTIVE_PUBLISH_FAILURES", "-1")
+    get_settings.cache_clear()
+
+    with pytest.raises(ValueError, match="MAX_CONSECUTIVE_PUBLISH_FAILURES"):
+        get_settings()
+
+    get_settings.cache_clear()
+
+
 def test_requires_all_mandatory_production_secrets(monkeypatch) -> None:
     _set_minimum_production_env(monkeypatch)
     monkeypatch.setenv("X_CLIENT_SECRET", "")
