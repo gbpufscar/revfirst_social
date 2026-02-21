@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List
-
-from sqlalchemy import asc, select
+from typing import TYPE_CHECKING, Any, Dict
 
 from src.control.command_schema import ControlResponse
+from src.control.queue_executor import execute_approved_queue_items
 from src.control.services import (
     create_pipeline_run,
     create_queue_item,
     finish_pipeline_run,
     get_pipeline_run_by_idempotency,
-    mark_queue_item_failed,
-    mark_queue_item_publishing,
-    mark_queue_item_published,
-    parse_queue_metadata,
 )
 from src.control.state import acquire_pipeline_run_lock
 from src.core.config import get_settings
@@ -24,8 +19,6 @@ from src.daily_post.service import generate_daily_post
 from src.domain.agents.pipeline import evaluate_candidate_bundle
 from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
 from src.media.service import generate_image_asset
-from src.publishing.service import publish_blog, publish_email, publish_instagram, publish_post, publish_reply
-from src.storage.models import ApprovalQueueItem
 
 if TYPE_CHECKING:
     from src.control.command_router import CommandContext
@@ -52,23 +45,6 @@ def _parse_run_request(context: "CommandContext") -> tuple[str | None, bool, boo
         if normalized in {"override", "--override", "owner_override=true"} and context.actor.role == "owner":
             owner_override = True
     return pipeline, dry_run, owner_override
-
-
-def _parse_scheduled_for(metadata: Dict[str, Any]) -> datetime | None:
-    raw_value = metadata.get("scheduled_for")
-    if raw_value is None:
-        return None
-    value = str(raw_value).strip()
-    if not value:
-        return None
-    normalized = value.replace("Z", "+00:00")
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
 
 
 def _run_ingest_open_calls(context: "CommandContext", *, dry_run: bool) -> Dict[str, Any]:
@@ -162,134 +138,15 @@ def _run_propose_replies(context: "CommandContext", *, dry_run: bool) -> Dict[st
 
 
 def _run_execute_approved(context: "CommandContext", *, dry_run: bool, owner_override: bool) -> Dict[str, Any]:
-    workspace_id = context.envelope.workspace_id
-    approved_items: List[ApprovalQueueItem] = list(
-        context.session.scalars(
-            select(ApprovalQueueItem)
-            .where(
-                ApprovalQueueItem.workspace_id == workspace_id,
-                ApprovalQueueItem.status == "approved",
-            )
-            .order_by(asc(ApprovalQueueItem.created_at))
-            .limit(20)
-        ).all()
+    return execute_approved_queue_items(
+        context.session,
+        workspace_id=context.envelope.workspace_id,
+        x_client=context.x_client,
+        dry_run=dry_run,
+        owner_override=owner_override,
+        due_only=True,
+        limit=20,
     )
-
-    published = 0
-    failed = 0
-    scheduled_pending = 0
-
-    for item in approved_items:
-        metadata = parse_queue_metadata(item)
-        if item.item_type == "instagram":
-            scheduled_for = _parse_scheduled_for(metadata)
-            if scheduled_for is not None and scheduled_for > datetime.now(timezone.utc):
-                scheduled_pending += 1
-                continue
-
-        if dry_run:
-            published += 1
-            continue
-
-        mark_queue_item_publishing(
-            context.session,
-            item=item,
-            approved_by_user_id=item.approved_by_user_id,
-        )
-
-        try:
-            if item.item_type == "reply":
-                in_reply_to_tweet_id = str(metadata.get("in_reply_to_tweet_id") or "").strip()
-                if not in_reply_to_tweet_id:
-                    mark_queue_item_failed(context.session, item=item, error_message="missing_reply_target")
-                    failed += 1
-                    continue
-                result = publish_reply(
-                    context.session,
-                    workspace_id=workspace_id,
-                    text=item.content_text,
-                    in_reply_to_tweet_id=in_reply_to_tweet_id,
-                    thread_id=(str(metadata.get("thread_id")) if metadata.get("thread_id") else None),
-                    target_author_id=(str(metadata.get("target_author_id")) if metadata.get("target_author_id") else None),
-                    x_client=context.x_client,
-                    owner_override=owner_override,
-                )
-            elif item.item_type == "post":
-                result = publish_post(
-                    context.session,
-                    workspace_id=workspace_id,
-                    text=item.content_text,
-                    x_client=context.x_client,
-                    owner_override=owner_override,
-                )
-            elif item.item_type == "email":
-                recipients_raw = metadata.get("recipients")
-                recipients = []
-                if isinstance(recipients_raw, str):
-                    recipients = [value.strip() for value in recipients_raw.split(",") if value.strip()]
-                elif isinstance(recipients_raw, list):
-                    recipients = [str(value).strip() for value in recipients_raw if str(value).strip()]
-
-                result = publish_email(
-                    context.session,
-                    workspace_id=workspace_id,
-                    subject=str(metadata.get("subject") or "RevFirst update"),
-                    body=item.content_text,
-                    recipients=recipients,
-                    source_kind=item.source_kind,
-                    source_ref_id=item.source_ref_id,
-                    owner_override=owner_override,
-                )
-            elif item.item_type == "blog":
-                image_url = str(metadata.get("image_url") or "").strip()
-                result = publish_blog(
-                    context.session,
-                    workspace_id=workspace_id,
-                    title=str(metadata.get("title") or "RevFirst blog draft"),
-                    markdown=item.content_text,
-                    image_url=(image_url or None),
-                    source_kind=item.source_kind,
-                    source_ref_id=item.source_ref_id,
-                    owner_override=owner_override,
-                )
-            elif item.item_type == "instagram":
-                scheduled_for = _parse_scheduled_for(metadata)
-                image_url = str(
-                    metadata.get("image_url") or metadata.get("media_url") or metadata.get("asset_url") or ""
-                ).strip()
-                result = publish_instagram(
-                    context.session,
-                    workspace_id=workspace_id,
-                    caption=item.content_text,
-                    image_url=(image_url or None),
-                    source_kind=item.source_kind,
-                    source_ref_id=item.source_ref_id,
-                    scheduled_for=(scheduled_for.isoformat() if scheduled_for is not None else None),
-                    owner_override=owner_override,
-                )
-            else:
-                mark_queue_item_failed(context.session, item=item, error_message="unsupported_queue_item_type")
-                failed += 1
-                continue
-        except Exception:
-            mark_queue_item_failed(context.session, item=item, error_message="unexpected_publish_error")
-            failed += 1
-            continue
-
-        if result.published:
-            mark_queue_item_published(context.session, item=item, external_post_id=result.external_post_id)
-            published += 1
-        else:
-            mark_queue_item_failed(context.session, item=item, error_message=result.message)
-            failed += 1
-
-    return {
-        "status": "dry_run" if dry_run else "ok",
-        "approved_items": len(approved_items),
-        "published": published,
-        "failed": failed,
-        "scheduled_pending": scheduled_pending,
-    }
 
 
 def _run_daily_post(context: "CommandContext", *, dry_run: bool) -> Dict[str, Any]:

@@ -5,13 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 from typing import Any, Dict
-import uuid
 
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from src.analytics.x_performance_agent import build_workspace_growth_report, collect_workspace_growth_snapshot
+from src.control.queue_executor import execute_approved_queue_items
+from src.control.services import create_queue_item as create_control_queue_item
 from src.core.config import get_settings
+from src.core.logger import get_logger
 from src.core.metrics import record_replies_generated, record_reply_blocked
 from src.daily_post.service import generate_daily_post
 from src.domain.agents.pipeline import evaluate_candidate_bundle
@@ -19,13 +21,17 @@ from src.ingestion.open_calls import list_candidates, run_open_calls_ingestion
 from src.integrations.x.service import get_workspace_x_access_token
 from src.integrations.x.x_client import XClient
 from src.media.service import generate_image_asset
+from src.operations.daily_operational_reporter import run_daily_operational_report
 from src.operations.stability_guard_agent import run_workspace_stability_guard_cycle
 from src.storage.redis_client import get_client as get_redis_client
-from src.storage.models import ApprovalQueueItem, DailyPostDraft, WorkspaceEvent
+from src.storage.models import DailyPostDraft, WorkspaceEvent
 from src.strategy.x_growth_strategy_agent import run_workspace_strategy_discovery, run_workspace_strategy_scan
 
 
 _ALLOWED_QUEUE_TYPES = {"reply", "post", "email", "blog", "instagram"}
+_DAILY_OPERATIONAL_REPORT_EVENT = "daily_operational_report_sent"
+
+logger = get_logger("revfirst.orchestrator.pipeline")
 
 
 def _json_dumps(payload: Dict[str, Any]) -> str:
@@ -44,38 +50,22 @@ def _create_queue_item(
     opportunity_score: int | None,
     metadata: Dict[str, Any] | None = None,
     idempotency_key: str | None = None,
-) -> ApprovalQueueItem:
+) -> None:
     normalized_type = item_type.strip().lower()
     if normalized_type not in _ALLOWED_QUEUE_TYPES:
         raise ValueError("unsupported_queue_item_type")
-
-    existing = None
-    if idempotency_key:
-        existing = session.scalar(
-            select(ApprovalQueueItem).where(
-                ApprovalQueueItem.workspace_id == workspace_id,
-                ApprovalQueueItem.idempotency_key == idempotency_key,
-            )
-        )
-    if existing is not None:
-        return existing
-
-    item = ApprovalQueueItem(
-        id=str(uuid.uuid4()),
+    create_control_queue_item(
+        session,
         workspace_id=workspace_id,
         item_type=normalized_type,
-        status="pending",
         content_text=content_text,
         source_kind=source_kind,
         source_ref_id=source_ref_id,
         intent=intent,
         opportunity_score=opportunity_score,
-        metadata_json=_json_dumps(metadata or {}),
+        metadata=metadata,
         idempotency_key=idempotency_key,
     )
-    session.add(item)
-    session.commit()
-    return item
 
 
 def _is_brand_ok(bundle: Dict[str, Any]) -> bool:
@@ -114,6 +104,107 @@ def _normalize_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_daily_operational_report_due(
+    session: Session,
+    *,
+    workspace_id: str,
+    now: datetime,
+) -> bool:
+    now_utc = _normalize_datetime(now)
+    if now_utc.hour == 0 and now_utc.minute < 10:
+        return False
+
+    last_sent_at = session.scalar(
+        select(WorkspaceEvent.created_at)
+        .where(
+            WorkspaceEvent.workspace_id == workspace_id,
+            WorkspaceEvent.event_type == _DAILY_OPERATIONAL_REPORT_EVENT,
+        )
+        .order_by(desc(WorkspaceEvent.created_at))
+        .limit(1)
+    )
+    if last_sent_at is None:
+        return True
+    return _normalize_datetime(last_sent_at).date() < now_utc.date()
+
+
+def _run_daily_operational_reporter(
+    session: Session,
+    *,
+    workspace_id: str,
+) -> Dict[str, Any]:
+    now_utc = _utc_now()
+    if not _is_daily_operational_report_due(
+        session,
+        workspace_id=workspace_id,
+        now=now_utc,
+    ):
+        return {
+            "status": "skipped_not_due",
+            "date_utc": now_utc.date().isoformat(),
+            "scheduled_at_utc": "00:10",
+        }
+
+    try:
+        report_result = run_daily_operational_report(
+            session,
+            workspace_id=workspace_id,
+            redis_client=get_redis_client(),
+            now=now_utc,
+        )
+    except Exception as exc:  # pragma: no cover
+        try:
+            session.rollback()
+        except Exception:
+            pass
+        logger.warning(
+            "daily_operational_reporter_unhandled_error",
+            workspace_id=workspace_id,
+            error=str(exc),
+        )
+        return {
+            "status": "failed",
+            "error": str(exc),
+            "date_utc": now_utc.date().isoformat(),
+            "scheduled_at_utc": "00:10",
+        }
+
+    snapshot = report_result.get("snapshot") if isinstance(report_result.get("snapshot"), dict) else {}
+    delivery = report_result.get("delivery") if isinstance(report_result.get("delivery"), dict) else {}
+    event_payload = {
+        "status": str(report_result.get("status") or "error"),
+        "date_utc": now_utc.date().isoformat(),
+        "scheduled_at_utc": "00:10",
+        "risk_assessment": str(snapshot.get("risk_assessment") or "LOW"),
+        "delivery": {
+            "attempted": int(delivery.get("attempted") or 0),
+            "delivered": int(delivery.get("delivered") or 0),
+            "failed": int(delivery.get("failed") or 0),
+        },
+    }
+    session.add(
+        WorkspaceEvent(
+            workspace_id=workspace_id,
+            event_type=_DAILY_OPERATIONAL_REPORT_EVENT,
+            payload_json=_json_dumps(event_payload),
+            created_at=now_utc,
+        )
+    )
+    session.commit()
+    return {
+        "status": "executed",
+        "report_status": event_payload["status"],
+        "date_utc": event_payload["date_utc"],
+        "scheduled_at_utc": "00:10",
+        "risk_assessment": event_payload["risk_assessment"],
+        "delivery": event_payload["delivery"],
+    }
 
 
 def _is_workspace_event_due(
@@ -431,6 +522,23 @@ def _queue_daily_post(
     }
 
 
+def execute_due_scheduled_posts(
+    session: Session,
+    *,
+    workspace_id: str,
+    x_client: XClient,
+) -> Dict[str, Any]:
+    return execute_approved_queue_items(
+        session,
+        workspace_id=workspace_id,
+        x_client=x_client,
+        dry_run=False,
+        owner_override=False,
+        due_only=True,
+        limit=20,
+    )
+
+
 def run_workspace_pipeline(
     session: Session,
     *,
@@ -453,6 +561,19 @@ def run_workspace_pipeline(
         except Exception as exc:
             stability_guard = {"status": "failed", "error": str(exc)}
 
+    try:
+        daily_operational_report = _run_daily_operational_reporter(
+            session,
+            workspace_id=workspace_id,
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.warning(
+            "daily_operational_reporter_pipeline_wrapper_failed",
+            workspace_id=workspace_id,
+            error=str(exc),
+        )
+        daily_operational_report = {"status": "failed", "error": str(exc)}
+
     containment = stability_guard.get("containment") if isinstance(stability_guard.get("containment"), dict) else {}
     kill_switch_action = (
         stability_guard.get("kill_switch_action") if isinstance(stability_guard.get("kill_switch_action"), dict) else {}
@@ -465,6 +586,7 @@ def run_workspace_pipeline(
             "evaluated_candidates": 0,
             "eligible_reply_candidates": 0,
             "stability_guard": stability_guard,
+            "daily_operational_report": daily_operational_report,
         }
 
     access_token = get_workspace_x_access_token(session, workspace_id=workspace_id)
@@ -476,6 +598,7 @@ def run_workspace_pipeline(
             "evaluated_candidates": 0,
             "eligible_reply_candidates": 0,
             "stability_guard": stability_guard,
+            "daily_operational_report": daily_operational_report,
         }
 
     ingestion = run_open_calls_ingestion(
@@ -568,6 +691,19 @@ def run_workspace_pipeline(
                 "generated_images": {},
             }
 
+    scheduled_publish_execution = {"status": "disabled"}
+    try:
+        scheduled_publish_execution = execute_due_scheduled_posts(
+            session,
+            workspace_id=workspace_id,
+            x_client=x_client,
+        )
+    except Exception as exc:
+        scheduled_publish_execution = {
+            "status": "failed",
+            "error": str(exc),
+        }
+
     growth_agent: Dict[str, Any] = {"status": "disabled"}
     if settings.scheduler_growth_collection_enabled:
         try:
@@ -621,8 +757,10 @@ def run_workspace_pipeline(
         "eligible_reply_candidates": eligible,
         "queued_reply_candidates": queued_reply_candidates,
         "daily_post_queue": daily_post_queue,
+        "scheduled_publish_execution": scheduled_publish_execution,
         "growth_agent": growth_agent,
         "strategy_discovery_agent": strategy_discovery_agent,
         "strategy_agent": strategy_agent,
         "stability_guard": stability_guard,
+        "daily_operational_report": daily_operational_report,
     }

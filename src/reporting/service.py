@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.editorial.queue_states import APPROVED_SCHEDULED_STATUSES, PENDING_REVIEW_STATUSES
 from src.storage.models import ApprovalQueueItem, PublishAuditLog, WorkspaceDailyUsage
 
 
@@ -106,9 +107,13 @@ def _publish_summary(rows: list[PublishAuditLog]) -> Dict[str, Any]:
 
 def _queue_summary(rows: list[ApprovalQueueItem]) -> Dict[str, int]:
     counter = Counter(row.status for row in rows)
+    pending_review = sum(int(counter.get(status, 0)) for status in PENDING_REVIEW_STATUSES)
+    approved_scheduled = sum(int(counter.get(status, 0)) for status in APPROVED_SCHEDULED_STATUSES)
     return {
-        "pending": int(counter.get("pending", 0)),
-        "approved": int(counter.get("approved", 0)),
+        "pending_review": pending_review,
+        "approved_scheduled": approved_scheduled,
+        "pending": pending_review,
+        "approved": approved_scheduled,
         "published": int(counter.get("published", 0)),
         "failed": int(counter.get("failed", 0)),
         "rejected": int(counter.get("rejected", 0)),
@@ -133,7 +138,7 @@ def _recommendations(usage: Dict[str, int], publish: Dict[str, Any], queue: Dict
     if blocked_plan > 0:
         recommendations.append("Plan limits are blocking output; adjust overrides or upgrade plan.")
 
-    if int(queue.get("pending", 0)) > 10:
+    if int(queue.get("pending_review", 0)) > 10:
         recommendations.append("Approval queue is accumulating; increase approval cadence in Telegram.")
 
     if not recommendations:

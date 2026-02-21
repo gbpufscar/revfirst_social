@@ -6,12 +6,13 @@ from sqlalchemy import select
 import src.channels.blog.publisher as blog_publisher_module
 import src.channels.email.publisher as email_publisher_module
 import src.channels.instagram.publisher as instagram_publisher_module
+import src.control.handlers.approve as approve_handler_module
 from src.control.services import create_queue_item
-from src.storage.models import ApprovalQueueItem, WorkspaceControlSetting
+from src.storage.models import ApprovalQueueItem, WorkspaceControlSetting, WorkspaceEvent
 from tests.control.conftest import create_control_test_context, teardown_control_test_context
 
 
-def test_queue_and_approve_publish_reply(monkeypatch, tmp_path) -> None:
+def test_queue_and_approve_schedule_reply_then_publish_now(monkeypatch, tmp_path) -> None:
     context = create_control_test_context(monkeypatch, tmp_path)
     try:
         manual_token = context.client.post(
@@ -84,8 +85,28 @@ def test_queue_and_approve_publish_reply(monkeypatch, tmp_path) -> None:
         assert approve_response.status_code == 200
         approve_payload = approve_response.json()
         assert approve_payload["accepted"] is True
-        assert approve_payload["message"] == "approved_and_published"
-        assert approve_payload["data"]["external_post_id"] == "tweet-1"
+        assert approve_payload["message"] == "approved_scheduled"
+        assert approve_payload["data"]["status"] == "approved_scheduled"
+        assert approve_payload["data"]["scheduled_for"]
+
+        publish_now_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 40021,
+                "message": {
+                    "message_id": 9021,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/approve_now {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert publish_now_response.status_code == 200
+        publish_now_payload = publish_now_response.json()
+        assert publish_now_payload["accepted"] is True
+        assert publish_now_payload["message"] == "approved_and_published"
+        assert publish_now_payload["data"]["external_post_id"] == "tweet-1"
 
         with context.session_factory() as session:
             row = session.scalar(
@@ -101,7 +122,7 @@ def test_queue_and_approve_publish_reply(monkeypatch, tmp_path) -> None:
         teardown_control_test_context()
 
 
-def test_queue_approve_blocks_publish_in_containment_without_owner_override(monkeypatch, tmp_path) -> None:
+def test_queue_approve_now_blocks_publish_in_containment_without_owner_override(monkeypatch, tmp_path) -> None:
     context = create_control_test_context(monkeypatch, tmp_path)
     try:
         manual_token = context.client.post(
@@ -159,7 +180,7 @@ def test_queue_approve_blocks_publish_in_containment_without_owner_override(monk
                     "message_id": 903,
                     "chat": {"id": 7001},
                     "from": {"id": 90001},
-                    "text": f"/approve {queue_id}",
+                    "text": f"/approve_now {queue_id}",
                 },
             },
             headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
@@ -183,7 +204,7 @@ def test_queue_approve_blocks_publish_in_containment_without_owner_override(monk
         teardown_control_test_context()
 
 
-def test_queue_approve_allows_owner_override_in_containment(monkeypatch, tmp_path) -> None:
+def test_queue_approve_now_allows_owner_override_in_containment(monkeypatch, tmp_path) -> None:
     context = create_control_test_context(monkeypatch, tmp_path)
     try:
         manual_token = context.client.post(
@@ -241,7 +262,7 @@ def test_queue_approve_allows_owner_override_in_containment(monkeypatch, tmp_pat
                     "message_id": 904,
                     "chat": {"id": 7001},
                     "from": {"id": 90001},
-                    "text": f"/approve {queue_id} override",
+                    "text": f"/approve_now {queue_id} override",
                 },
             },
             headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
@@ -321,7 +342,7 @@ def test_queue_and_approve_publish_email(monkeypatch, tmp_path) -> None:
                     "message_id": 912,
                     "chat": {"id": 7001},
                     "from": {"id": 90001},
-                    "text": f"/approve {queue_id}",
+                    "text": f"/approve_now {queue_id}",
                 },
             },
             headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
@@ -378,7 +399,7 @@ def test_queue_and_approve_publish_blog(monkeypatch, tmp_path) -> None:
                     "message_id": 922,
                     "chat": {"id": 7001},
                     "from": {"id": 90001},
-                    "text": f"/approve {queue_id}",
+                    "text": f"/approve_now {queue_id}",
                 },
             },
             headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
@@ -434,7 +455,7 @@ def test_queue_and_approve_publish_instagram(monkeypatch, tmp_path) -> None:
                     "message_id": 932,
                     "chat": {"id": 7001},
                     "from": {"id": 90001},
-                    "text": f"/approve {queue_id}",
+                    "text": f"/approve_now {queue_id}",
                 },
             },
             headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
@@ -501,7 +522,7 @@ def test_queue_and_approve_schedules_instagram_for_future(monkeypatch, tmp_path)
         approve_payload = approve_response.json()
         assert approve_payload["accepted"] is True
         assert approve_payload["message"] == "approved_scheduled"
-        assert approve_payload["data"]["status"] == "approved"
+        assert approve_payload["data"]["status"] == "approved_scheduled"
         assert fake_instagram.counter == 0
 
         with context.session_factory() as session:
@@ -512,7 +533,123 @@ def test_queue_and_approve_schedules_instagram_for_future(monkeypatch, tmp_path)
                 )
             )
             assert row is not None
-            assert row.status == "approved"
+            assert row.status == "approved_scheduled"
             assert row.published_post_id is None
+    finally:
+        teardown_control_test_context()
+
+
+def test_reject_triggers_guarded_auto_regeneration(monkeypatch, tmp_path) -> None:
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        class _FakeDailyPostResult:
+            status = "ready"
+            draft_id = "regen-draft-1"
+            text = "Replacement founder post."
+            channel_targets = ["x"]
+            channel_previews = {"x": {"metadata": {"image_url": "https://cdn.revfirst.cloud/regen-1.jpg"}}}
+
+        monkeypatch.setattr(
+            approve_handler_module,
+            "generate_daily_post",
+            lambda session, *, workspace_id, topic, auto_publish, x_client: _FakeDailyPostResult(),  # noqa: ARG005
+        )
+
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="post",
+                content_text="Original rejected post.",
+                source_kind="daily_post_draft",
+                source_ref_id="daily-draft-100",
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key="test-reject-regen-1",
+                metadata={"draft_id": "daily-draft-100"},
+            )
+            queue_id = queue_item.id
+
+        reject_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 4991,
+                "message": {
+                    "message_id": 9951,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/reject {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert reject_response.status_code == 200
+        payload = reject_response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "queue_item_rejected_regenerated"
+        assert payload["data"]["auto_regeneration"]["triggered"] is True
+
+        with context.session_factory() as session:
+            generated_items = list(
+                session.scalars(
+                    select(ApprovalQueueItem).where(
+                        ApprovalQueueItem.workspace_id == context.workspace_id,
+                        ApprovalQueueItem.source_ref_id == "regen-draft-1",
+                    )
+                ).all()
+            )
+            assert len(generated_items) == 1
+            assert generated_items[0].status == "pending_review"
+    finally:
+        teardown_control_test_context()
+
+
+def test_reject_auto_regeneration_respects_daily_cap(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("MAX_REGEN_PER_DAY", "1")
+    context = create_control_test_context(monkeypatch, tmp_path)
+    try:
+        with context.session_factory() as session:
+            queue_item = create_queue_item(
+                session,
+                workspace_id=context.workspace_id,
+                item_type="post",
+                content_text="Post to reject with cap reached.",
+                source_kind="daily_post_draft",
+                source_ref_id="daily-draft-200",
+                intent="daily_post",
+                opportunity_score=100,
+                idempotency_key="test-reject-regen-cap-1",
+                metadata={"draft_id": "daily-draft-200"},
+            )
+            session.add(
+                WorkspaceEvent(
+                    workspace_id=context.workspace_id,
+                    event_type="editorial_auto_regeneration_created",
+                    payload_json="{}",
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+            queue_id = queue_item.id
+
+        reject_response = context.client.post(
+            f"/control/telegram/webhook/{context.workspace_id}",
+            json={
+                "update_id": 4992,
+                "message": {
+                    "message_id": 9952,
+                    "chat": {"id": 7001},
+                    "from": {"id": 90001},
+                    "text": f"/reject {queue_id}",
+                },
+            },
+            headers={"X-Telegram-Bot-Api-Secret-Token": "phase12-secret"},
+        )
+        assert reject_response.status_code == 200
+        payload = reject_response.json()
+        assert payload["accepted"] is True
+        assert payload["message"] == "queue_item_rejected"
+        assert payload["data"]["auto_regeneration"]["triggered"] is False
+        assert payload["data"]["auto_regeneration"]["reason"] == "regen_cap_reached"
     finally:
         teardown_control_test_context()

@@ -63,7 +63,7 @@ def _render_queue_reply(data: Dict[str, Any]) -> str:
         lines.append(f"{index}. {item_type} | {queue_id}")
         lines.append(f"Copy: {copy_text or '(vazio)'}")
         lines.append(f"Imagem: {image_url if image_url else 'sem imagem'}")
-        lines.append(f"Acoes: /preview {queue_id} | /approve {queue_id}")
+        lines.append(f"Acoes: /preview {queue_id} | /approve {queue_id} | /approve_now {queue_id}")
     return "\n".join(lines)
 
 
@@ -76,6 +76,7 @@ def _render_status_reply(data: Dict[str, Any]) -> str:
     channels = data.get("channels") if isinstance(data.get("channels"), dict) else {}
     enabled_channels = sorted([name for name, is_enabled in channels.items() if bool(is_enabled)])
     last_runs = data.get("last_runs") if isinstance(data.get("last_runs"), dict) else {}
+    editorial = data.get("editorial_stock") if isinstance(data.get("editorial_stock"), dict) else {}
     last_run_summary = "nenhum"
     if last_runs:
         first_pipeline = sorted(last_runs.keys())[0]
@@ -90,6 +91,10 @@ def _render_status_reply(data: Dict[str, Any]) -> str:
         f"- Kill-switch global: {'ativo' if global_kill_switch else 'inativo'}"
         f"{' (ttl=' + str(global_kill_ttl) + 's)' if global_kill_ttl is not None else ''}\n"
         f"- Canais ativos: {', '.join(enabled_channels) if enabled_channels else 'nenhum'}\n"
+        f"- Pending Review: {int(editorial.get('pending_review_count') or 0)}\n"
+        f"- Approved Scheduled: {int(editorial.get('approved_scheduled_count') or 0)}\n"
+        f"- Next Window (UTC): {str(editorial.get('next_window_utc') or 'n/d')}\n"
+        f"- Coverage Days: {editorial.get('coverage_days') if editorial.get('coverage_days') is not None else '0.0'}\n"
         f"- Ultimo run: {last_run_summary}\n"
         "Proxima acao: use /queue para revisar pendencias."
     )
@@ -450,6 +455,17 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
             f"post_id: {external_post_id}\n"
             "Proxima acao: rode /queue para o proximo item."
         )
+    elif response.message == "approved_scheduled":
+        queue_id = data.get("queue_id")
+        scheduled_for = data.get("scheduled_for") or "n/d"
+        window_key = data.get("window_key") or "n/d"
+        body = (
+            "Aprovado e agendado.\n"
+            f"queue_id: {queue_id}\n"
+            f"scheduled_for_utc: {scheduled_for}\n"
+            f"window_key: {window_key}\n"
+            "Proxima acao: aguarde janela de publicacao ou use /approve_now para publicar imediato."
+        )
     elif response.message == "approve_publish_failed":
         queue_id = data.get("queue_id")
         error = data.get("error") or response.message
@@ -459,10 +475,19 @@ def _render_chat_reply(response: ControlWebhookResponse) -> str:
             f"erro: {error}\n"
             "Proxima acao: revise /preview <queue_id> e tente novamente."
         )
+    elif response.message == "queue_item_rejected_regenerated":
+        auto_regen = data.get("auto_regeneration") if isinstance(data.get("auto_regeneration"), dict) else {}
+        body = (
+            "Item rejeitado e regeneracao automatica executada.\n"
+            f"queue_id_rejeitado: {data.get('queue_id')}\n"
+            f"novo_queue_id: {auto_regen.get('queue_id')}\n"
+            f"draft_id: {auto_regen.get('draft_id')}\n"
+            "Proxima acao: rode /queue para revisar o novo rascunho."
+        )
     elif response.message == "no_pending_queue_item":
         body = "Nao ha item pendente para aprovar. Use /queue para verificar."
     elif response.message == "missing_queue_id":
-        body = "Informe o queue_id. Exemplo: /approve <queue_id> ou /preview <queue_id>."
+        body = "Informe o queue_id. Exemplo: /approve <queue_id>, /approve_now <queue_id> ou /preview <queue_id>."
     elif response.message == "unknown_command":
         body = "Comando nao reconhecido. Use /help para ver comandos disponiveis."
     elif response.message == "unauthorized":

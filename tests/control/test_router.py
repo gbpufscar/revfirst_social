@@ -750,7 +750,7 @@ def test_run_execute_approved_skips_future_scheduled_instagram(monkeypatch, tmp_
                     "scheduled_for": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
                 },
             )
-            queue_item.status = "approved"
+            queue_item.status = "approved_scheduled"
             session.commit()
 
         run_execute = context.client.post(

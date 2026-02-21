@@ -21,6 +21,7 @@ from src.control.state import (
     set_workspace_paused,
 )
 from src.core.config import get_settings
+from src.editorial.queue_states import PENDING_REVIEW_STATUSES
 from src.integrations.x.service import get_workspace_x_connection_status
 from src.storage.models import AdminAction, ApprovalQueueItem, PipelineRun, PublishAuditLog, WorkspaceEvent
 
@@ -238,7 +239,7 @@ def _check_queue_health(session: Session, *, workspace_id: str, now: datetime) -
             .select_from(ApprovalQueueItem)
             .where(
                 ApprovalQueueItem.workspace_id == workspace_id,
-                ApprovalQueueItem.status == "pending",
+                ApprovalQueueItem.status.in_(PENDING_REVIEW_STATUSES),
             )
         )
         or 0
@@ -259,7 +260,7 @@ def _check_queue_health(session: Session, *, workspace_id: str, now: datetime) -
         select(ApprovalQueueItem.created_at)
         .where(
             ApprovalQueueItem.workspace_id == workspace_id,
-            ApprovalQueueItem.status == "pending",
+            ApprovalQueueItem.status.in_(PENDING_REVIEW_STATUSES),
         )
         .order_by(asc(ApprovalQueueItem.created_at))
         .limit(1)

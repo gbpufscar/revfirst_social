@@ -45,7 +45,7 @@ def parse_command(text: str) -> Optional[ControlCommand]:
     stripped = (text or "").strip()
     lowered = stripped.lower()
     if lowered in {"sim", "aprovado", "aprovar", "approve"}:
-        return ControlCommand(name="approve", args=[], raw_text=stripped)
+        return ControlCommand(name="approve_now", args=[], raw_text=stripped)
 
     if not stripped.startswith("/"):
         return None
@@ -74,7 +74,17 @@ def parse_command(text: str) -> Optional[ControlCommand]:
         args = remainder.split() if remainder else []
         return ControlCommand(name=command_name, args=args, raw_text=stripped)
 
-    if command_name in {"approve", "reject", "preview", "run", "channel", "limit", "strategy_scan", "strategy_discover"}:
+    if command_name in {
+        "approve",
+        "approve_now",
+        "reject",
+        "preview",
+        "run",
+        "channel",
+        "limit",
+        "strategy_scan",
+        "strategy_discover",
+    }:
         args = remainder.split() if remainder else []
         return ControlCommand(name=command_name, args=args, raw_text=stripped)
 
