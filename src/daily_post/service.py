@@ -57,6 +57,19 @@ _STOPWORDS = {
 }
 
 
+def _extract_tokens_from_text(text: str, *, limit: int = 4) -> List[str]:
+    tokens: List[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[a-zA-Z]{3,}", text.lower()):
+        if token in _STOPWORDS or token in seen:
+            continue
+        tokens.append(token)
+        seen.add(token)
+        if len(tokens) >= limit:
+            break
+    return tokens
+
+
 @dataclass(frozen=True)
 class DailyPostResult:
     workspace_id: str
@@ -93,11 +106,13 @@ def _json_load_dict(payload: str) -> Dict[str, Any]:
 
 def _extract_keywords(seeds: List[TelegramSeed], limit: int = 4) -> List[str]:
     counter: Dict[str, int] = {}
-    for seed in seeds:
+    for index, seed in enumerate(seeds):
+        # Keep the system responsive to newer seed signals.
+        weight = max(len(seeds) - index, 1)
         for token in re.findall(r"[a-zA-Z]{3,}", seed.normalized_text.lower()):
             if token in _STOPWORDS:
                 continue
-            counter[token] = counter.get(token, 0) + 1
+            counter[token] = counter.get(token, 0) + weight
 
     ranked = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
     return [token for token, _ in ranked[:limit]]
@@ -109,6 +124,7 @@ def _build_style_memory(seeds: List[TelegramSeed]) -> Dict[str, Any]:
             "seed_count": 0,
             "average_seed_sentence_words": 0.0,
             "top_keywords": [],
+            "recent_keywords": [],
             "sample_openers": [],
         }
 
@@ -128,10 +144,12 @@ def _build_style_memory(seeds: List[TelegramSeed]) -> Dict[str, Any]:
         avg_seed_sentence_words = sum(avg_sentence_words_samples) / len(avg_sentence_words_samples)
 
     keywords = _extract_keywords(seeds)
+    recent_keywords = _extract_tokens_from_text(seeds[0].normalized_text, limit=4)
     return {
         "seed_count": len(seeds),
         "average_seed_sentence_words": round(avg_seed_sentence_words, 2),
         "top_keywords": keywords,
+        "recent_keywords": recent_keywords,
         "sample_openers": openers[:3],
     }
 
@@ -144,7 +162,8 @@ def _clean_topic(topic: Optional[str]) -> str:
 
 def _compose_daily_post(*, topic: str, style_memory: Dict[str, Any]) -> str:
     topic_fragment = topic.lower()
-    keywords = style_memory.get("top_keywords") or []
+    recent_keywords = style_memory.get("recent_keywords") or []
+    keywords = recent_keywords or style_memory.get("top_keywords") or []
     keyword_fragment = "conversation signals"
     if len(keywords) >= 2:
         keyword_fragment = f"{keywords[0]} and {keywords[1]}"
@@ -155,6 +174,52 @@ def _compose_daily_post(*, topic: str, style_memory: Dict[str, Any]) -> str:
     sentence_2 = f"Use {keyword_fragment} to write a direct post, then answer every relevant founder reply"
     sentence_3 = "Measure profile visits, founder conversations, and trial starts before changing the playbook"
     return f"{sentence_1}. {sentence_2}. {sentence_3}."
+
+
+def _load_recent_draft_texts(session: Session, *, workspace_id: str, limit: int = 30) -> set[str]:
+    safe_limit = max(1, min(limit, 100))
+    statement = (
+        select(DailyPostDraft.content_text)
+        .where(DailyPostDraft.workspace_id == workspace_id)
+        .order_by(desc(DailyPostDraft.created_at))
+        .limit(safe_limit)
+    )
+    return {str(value).strip() for value in session.scalars(statement).all() if str(value).strip()}
+
+
+def _build_variation_sentence(*, style_memory: Dict[str, Any], variant_index: int) -> str:
+    keywords = (style_memory.get("recent_keywords") or style_memory.get("top_keywords") or ["signal"])[:3]
+    primary = keywords[0]
+    secondary = keywords[1] if len(keywords) > 1 else "retention"
+    tertiary = keywords[2] if len(keywords) > 2 else "pipeline"
+    variants = [
+        f"Prioritize {primary} and {secondary} for the next execution cycle.",
+        f"Anchor replies in {primary} with one quantified example per thread.",
+        f"Track {tertiary} as the guardrail metric before changing the angle.",
+        "Keep the loop tight: hypothesis, post, replies, and one next action.",
+    ]
+    return variants[variant_index % len(variants)]
+
+
+def _ensure_unique_daily_post(
+    *,
+    text: str,
+    style_memory: Dict[str, Any],
+    recent_texts: set[str],
+) -> str:
+    if text not in recent_texts:
+        return text
+
+    for index in range(4):
+        candidate = f"{text} {_build_variation_sentence(style_memory=style_memory, variant_index=index)}"
+        if candidate not in recent_texts:
+            return candidate
+
+    fallback = f"{text} Execution cycle refresh: ship one new variant before the next publish window."
+    if fallback not in recent_texts:
+        return fallback
+
+    return f"{fallback} Window tag {datetime.now(timezone.utc).strftime('%Y%m%d%H%M')}."
 
 
 def _build_content_object(
@@ -269,7 +334,9 @@ def generate_daily_post(
         record_seed_used(workspace_id=workspace_id, count=len(seeds))
 
     resolved_topic = _clean_topic(topic)
+    recent_texts = _load_recent_draft_texts(session, workspace_id=workspace_id)
     text = _compose_daily_post(topic=resolved_topic, style_memory=style_memory)
+    text = _ensure_unique_daily_post(text=text, style_memory=style_memory, recent_texts=recent_texts)
     seed_ids = [seed.id for seed in seeds]
     content_object = _build_content_object(
         workspace_id=workspace_id,
