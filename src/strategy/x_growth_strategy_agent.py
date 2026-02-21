@@ -73,6 +73,46 @@ def _normalize_dt(value: datetime) -> datetime:
     return value
 
 
+def build_x_profile_url(*, account_user_id: str, account_username: Optional[str]) -> str:
+    normalized_username = (account_username or "").strip().lstrip("@")
+    if normalized_username:
+        return f"https://x.com/{normalized_username}"
+    normalized_user_id = account_user_id.strip()
+    if normalized_user_id:
+        return f"https://x.com/i/user/{normalized_user_id}"
+    return "https://x.com"
+
+
+def get_strategy_discovery_criteria(*, settings: Any | None = None) -> Dict[str, Any]:
+    active_settings = settings if settings is not None else get_settings()
+    min_followers = max(0, _as_int(getattr(active_settings, "x_strategy_candidate_min_followers", 0)))
+    max_followers = max(min_followers, _as_int(getattr(active_settings, "x_strategy_candidate_max_followers", 0)))
+    return {
+        "min_score": max(0, min(100, _as_int(getattr(active_settings, "x_strategy_candidate_min_score", 0)))),
+        "min_avg_engagement": max(0.0, _as_float(getattr(active_settings, "x_strategy_candidate_min_avg_engagement", 0.0))),
+        "min_engagement_rate_pct": max(
+            0.0,
+            _as_float(getattr(active_settings, "x_strategy_candidate_min_engagement_rate_pct", 0.0)),
+        ),
+        "min_cadence_per_day": max(0.0, _as_float(getattr(active_settings, "x_strategy_candidate_min_cadence_per_day", 0.0))),
+        "min_signal_posts": max(0, _as_int(getattr(active_settings, "x_strategy_candidate_min_signal_posts", 0))),
+        "min_recent_posts": max(1, _as_int(getattr(active_settings, "x_strategy_candidate_min_recent_posts", 1))),
+        "min_followers": min_followers,
+        "max_followers": max_followers,
+        "require_followers_in_band": bool(
+            getattr(active_settings, "x_strategy_candidate_require_followers_in_band", True)
+        ),
+    }
+
+
+def parse_discovery_candidate_rationale(candidate: XStrategyDiscoveryCandidate) -> Dict[str, Any]:
+    raw = getattr(candidate, "rationale_json", "")
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    loaded = _json_load(raw)
+    return loaded if isinstance(loaded, dict) else {}
+
+
 def _score_discovery_candidate(
     *,
     followers_count: int,
@@ -219,7 +259,9 @@ def _upsert_discovery_candidate(
     cadence_per_day: float,
     score: int,
     rationale: Dict[str, Any],
+    status: str = "pending",
 ) -> tuple[XStrategyDiscoveryCandidate, bool]:
+    normalized_status = (status or "pending").strip().lower() or "pending"
     existing = session.scalar(
         select(XStrategyDiscoveryCandidate).where(
             XStrategyDiscoveryCandidate.workspace_id == workspace_id,
@@ -240,7 +282,7 @@ def _upsert_discovery_candidate(
             cadence_per_day=cadence_per_day,
             score=score,
             rationale_json=_json_dumps(rationale),
-            status="pending",
+            status=normalized_status,
         )
         session.add(row)
         return row, True
@@ -254,6 +296,11 @@ def _upsert_discovery_candidate(
     existing.cadence_per_day = cadence_per_day
     existing.score = score
     existing.rationale_json = _json_dumps(rationale)
+    if existing.status not in {"approved", "rejected"}:
+        existing.status = normalized_status
+        if normalized_status == "pending":
+            existing.reviewed_by_user_id = None
+            existing.reviewed_at = None
     existing.discovered_at = datetime.now(timezone.utc)
     existing.updated_at = datetime.now(timezone.utc)
     return existing, False
@@ -302,8 +349,16 @@ def run_workspace_strategy_discovery(
     query = settings.x_strategy_discovery_query.strip() or settings.x_default_open_calls_query
     max_results = max(10, min(settings.x_strategy_discovery_max_results, 100))
     max_candidates = max(1, min(settings.x_strategy_discovery_max_candidates, 25))
-    min_followers = max(0, settings.x_strategy_candidate_min_followers)
-    max_followers = max(min_followers, settings.x_strategy_candidate_max_followers)
+    criteria = get_strategy_discovery_criteria(settings=settings)
+    min_followers = int(criteria["min_followers"])
+    max_followers = int(criteria["max_followers"])
+    min_score = int(criteria["min_score"])
+    min_avg_engagement = float(criteria["min_avg_engagement"])
+    min_engagement_rate_pct = float(criteria["min_engagement_rate_pct"])
+    min_cadence_per_day = float(criteria["min_cadence_per_day"])
+    min_signal_posts = int(criteria["min_signal_posts"])
+    min_recent_posts = int(criteria["min_recent_posts"])
+    require_followers_in_band = bool(criteria["require_followers_in_band"])
 
     try:
         payload = x_client.search_open_calls(
@@ -345,9 +400,13 @@ def run_workspace_strategy_discovery(
     discovered = 0
     updated = 0
     scanned_users = 0
+    quality_rejected = 0
+    pruned_pending = 0
     errors: list[str] = []
     ranked_ids: list[str] = []
-    scored_candidates: list[tuple[int, Dict[str, Any]]] = []
+    rejected_by_reason: Counter[str] = Counter()
+    evaluated_candidates: list[Dict[str, Any]] = []
+    selected_candidates: list[Dict[str, Any]] = []
 
     dedupe_users: Dict[str, Dict[str, Any]] = {}
     for user in users_raw:
@@ -377,6 +436,7 @@ def run_workspace_strategy_discovery(
         followers_count = _as_int(metrics.get("followers_count"))
         tweet_count = _as_int(metrics.get("tweet_count"))
         if followers_count < min_followers:
+            rejected_by_reason["min_followers"] += 1
             continue
 
         try:
@@ -390,52 +450,142 @@ def run_workspace_strategy_discovery(
             continue
 
         post_stats = _calculate_recent_post_stats(posts)
+        signal_post_count = signal_posts_by_author.get(user_id, 0)
+        avg_engagement = _as_float(post_stats.get("avg_engagement"))
+        cadence_per_day = _as_float(post_stats.get("cadence_per_day"))
+        post_count = int(post_stats.get("post_count") or 0)
+        engagement_rate_pct = round((avg_engagement / max(1, followers_count)) * 100.0, 2)
         score, rationale = _score_discovery_candidate(
             followers_count=followers_count,
-            avg_engagement=_as_float(post_stats.get("avg_engagement")),
-            cadence_per_day=_as_float(post_stats.get("cadence_per_day")),
-            signal_posts=signal_posts_by_author.get(user_id, 0),
+            avg_engagement=avg_engagement,
+            cadence_per_day=cadence_per_day,
+            signal_posts=signal_post_count,
             min_followers=min_followers,
             max_followers=max_followers,
         )
-        rationale["signal_post_count"] = signal_posts_by_author.get(user_id, 0)
-        rationale["post_count"] = int(post_stats.get("post_count") or 0)
+        profile_url = build_x_profile_url(account_user_id=user_id, account_username=username)
 
+        quality_checks: Dict[str, bool] = {
+            "score": score >= min_score,
+            "avg_engagement": avg_engagement >= min_avg_engagement,
+            "engagement_rate_pct": engagement_rate_pct >= min_engagement_rate_pct,
+            "cadence_per_day": cadence_per_day >= min_cadence_per_day,
+            "signal_post_count": signal_post_count >= min_signal_posts,
+            "recent_posts": post_count >= min_recent_posts,
+        }
+        if require_followers_in_band:
+            quality_checks["followers_in_band"] = followers_count <= max_followers
+        failed_checks = [name for name, passed in quality_checks.items() if not passed]
+
+        rationale["signal_post_count"] = signal_post_count
+        rationale["post_count"] = post_count
+        rationale["engagement_rate_pct"] = engagement_rate_pct
+        rationale["profile_url"] = profile_url
+        rationale["criteria"] = criteria
+        rationale["quality_checks"] = quality_checks
+        rationale["failed_checks"] = failed_checks
+        rationale["quality_passed"] = not failed_checks
+
+        if failed_checks:
+            quality_rejected += 1
+            for failed_reason in failed_checks:
+                rejected_by_reason[failed_reason] += 1
+            continue
+
+        rationale["selection_reason"] = (
+            f"score={score}; engagement={avg_engagement:.1f}; rate={engagement_rate_pct:.2f}%; "
+            f"cadence={cadence_per_day:.2f}/day; signal_posts={signal_post_count}"
+        )
+        evaluated_candidates.append(
+            {
+                "account_user_id": user_id,
+                "account_username": username,
+                "followers_count": followers_count,
+                "tweet_count": tweet_count,
+                "avg_engagement": avg_engagement,
+                "cadence_per_day": cadence_per_day,
+                "signal_post_count": signal_post_count,
+                "post_count": post_count,
+                "engagement_rate_pct": engagement_rate_pct,
+                "score": score,
+                "profile_url": profile_url,
+                "rationale": rationale,
+            }
+        )
+
+    evaluated_candidates.sort(
+        key=lambda entry: (
+            int(entry.get("score") or 0),
+            float(entry.get("engagement_rate_pct") or 0.0),
+            int(entry.get("signal_post_count") or 0),
+        ),
+        reverse=True,
+    )
+    shortlisted = evaluated_candidates[:max_candidates]
+    dropped_by_rank = max(0, len(evaluated_candidates) - len(shortlisted))
+    if dropped_by_rank > 0:
+        rejected_by_reason["rank_cutoff"] += dropped_by_rank
+
+    shortlisted_user_ids: set[str] = set()
+    for entry in shortlisted:
         row, created = _upsert_discovery_candidate(
             session,
             workspace_id=workspace_id,
-            account_user_id=user_id,
-            account_username=username,
+            account_user_id=str(entry.get("account_user_id") or ""),
+            account_username=entry.get("account_username"),
             source_query=query,
-            signal_post_count=signal_posts_by_author.get(user_id, 0),
-            followers_count=followers_count,
-            tweet_count=tweet_count,
-            avg_engagement=_as_float(post_stats.get("avg_engagement")),
-            cadence_per_day=_as_float(post_stats.get("cadence_per_day")),
-            score=score,
-            rationale=rationale,
+            signal_post_count=int(entry.get("signal_post_count") or 0),
+            followers_count=entry.get("followers_count"),
+            tweet_count=entry.get("tweet_count"),
+            avg_engagement=float(entry.get("avg_engagement") or 0.0),
+            cadence_per_day=float(entry.get("cadence_per_day") or 0.0),
+            score=int(entry.get("score") or 0),
+            rationale=dict(entry.get("rationale") or {}),
+            status="pending",
         )
-        if row.status == "pending":
-            scored_candidates.append(
-                (
-                    row.score,
-                    {
-                        "candidate_id": row.id,
-                        "account_user_id": row.account_user_id,
-                        "account_username": row.account_username,
-                        "score": row.score,
-                        "followers_count": row.followers_count,
-                        "signal_post_count": row.signal_post_count,
-                    },
-                )
-            )
+        if row.status != "pending":
+            continue
+        shortlisted_user_ids.add(row.account_user_id)
         if created:
             discovered += 1
         else:
             updated += 1
+        selected_candidates.append(
+            {
+                "candidate_id": row.id,
+                "account_user_id": row.account_user_id,
+                "account_username": row.account_username,
+                "profile_url": build_x_profile_url(
+                    account_user_id=row.account_user_id,
+                    account_username=row.account_username,
+                ),
+                "score": row.score,
+                "followers_count": row.followers_count,
+                "signal_post_count": row.signal_post_count,
+                "avg_engagement": float(row.avg_engagement or 0.0),
+                "cadence_per_day": float(row.cadence_per_day or 0.0),
+                "engagement_rate_pct": float(entry.get("engagement_rate_pct") or 0.0),
+                "selection_reason": str((entry.get("rationale") or {}).get("selection_reason") or ""),
+            }
+        )
 
-    scored_candidates.sort(key=lambda item: item[0], reverse=True)
-    ranked_ids = [entry["candidate_id"] for _, entry in scored_candidates[:max_candidates]]
+    pending_rows = list(
+        session.scalars(
+            select(XStrategyDiscoveryCandidate).where(
+                XStrategyDiscoveryCandidate.workspace_id == workspace_id,
+                XStrategyDiscoveryCandidate.status == "pending",
+            )
+        ).all()
+    )
+    now = datetime.now(timezone.utc)
+    for row in pending_rows:
+        if row.account_user_id in shortlisted_user_ids:
+            continue
+        row.status = "rejected_auto"
+        row.updated_at = now
+        pruned_pending += 1
+
+    ranked_ids = [entry["candidate_id"] for entry in selected_candidates]
     session.flush()
     pending_count = len(list_pending_strategy_candidates(session, workspace_id=workspace_id, limit=200))
 
@@ -450,7 +600,11 @@ def run_workspace_strategy_discovery(
                     "scanned_users": scanned_users,
                     "discovered": discovered,
                     "updated": updated,
+                    "quality_rejected": quality_rejected,
+                    "pruned_pending": pruned_pending,
+                    "rejected_by_reason": dict(rejected_by_reason),
                     "pending_count": pending_count,
+                    "criteria": criteria,
                     "candidate_ids": ranked_ids,
                     "errors": errors,
                 }
@@ -466,8 +620,12 @@ def run_workspace_strategy_discovery(
         "scanned_users": scanned_users,
         "discovered": discovered,
         "updated": updated,
+        "quality_rejected": quality_rejected,
+        "pruned_pending": pruned_pending,
+        "rejected_by_reason": dict(rejected_by_reason),
+        "criteria": criteria,
         "pending_count": pending_count,
-        "candidates": [entry for _, entry in scored_candidates[:max_candidates]],
+        "candidates": selected_candidates,
         "errors": errors,
     }
 

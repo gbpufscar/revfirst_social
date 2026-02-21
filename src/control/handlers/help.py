@@ -34,6 +34,7 @@ def handle(context: "CommandContext") -> ControlResponse:
         "/strategy_scan <account_user_id> [account_username]",
         "/strategy_scan run",
         "/strategy_discover run",
+        "/strategy_discover criteria",
         "/strategy_discover queue",
         "/strategy_discover approve <candidate_id>",
         "/strategy_discover reject <candidate_id>",
